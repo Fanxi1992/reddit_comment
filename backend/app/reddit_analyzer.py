@@ -220,6 +220,8 @@ def process_single_reddit_item(
             )
 
         combined_text = f"标题: {title}\n"
+        if community_name:
+            combined_text += f"所在社区: {community_name}\n"
         if real_text:
             combined_text += f"正文内容: {real_text}\n"
         combined_text += f"\n问题: {custom_prompt}"
