@@ -1,0 +1,16 @@
+venv
+/venv
+__pycache__
+*.pyc
+.DS_Store
+# Ignore .env file containing sensitive information
+.env
+
+# Ignore log files
+*.log
+
+# frontend
+/node_modules
+/dist
+
+
