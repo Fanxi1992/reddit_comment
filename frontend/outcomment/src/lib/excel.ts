@@ -5,8 +5,6 @@ import { createPostInput, validatePosts } from './validation'
 
 const SHEET_NAME = 'Reddit帖子导入模板'
 const URL_HEADER = '帖子链接'
-const TITLE_HEADER = '帖子标题'
-const COMMUNITY_HEADER = '帖子社区'
 
 export async function parseExcelFile(file: File): Promise<{ posts: PostInput[]; report: ImportReport }> {
   const buffer = await file.arrayBuffer()
@@ -30,11 +28,9 @@ export async function parseExcelFile(file: File): Promise<{ posts: PostInput[]; 
     .map((row) =>
       createPostInput('excel', {
         url: String(row[URL_HEADER] ?? '').trim(),
-        title: String(row[TITLE_HEADER] ?? '').trim(),
-        community: String(row[COMMUNITY_HEADER] ?? '').trim(),
       }),
     )
-    .filter((post) => post.url || post.title || post.community)
+    .filter((post) => post.url)
 
   const validatedPosts = validatePosts(posts)
 
@@ -50,8 +46,8 @@ export async function parseExcelFile(file: File): Promise<{ posts: PostInput[]; 
 }
 
 export function downloadExcelTemplate(): void {
-  const worksheet = XLSX.utils.aoa_to_sheet([[URL_HEADER, TITLE_HEADER, COMMUNITY_HEADER]])
-  worksheet['!cols'] = [{ wch: 72 }, { wch: 32 }, { wch: 20 }]
+  const worksheet = XLSX.utils.aoa_to_sheet([[URL_HEADER]])
+  worksheet['!cols'] = [{ wch: 84 }]
 
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, worksheet, SHEET_NAME)
