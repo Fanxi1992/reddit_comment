@@ -61,9 +61,9 @@ def download_image_bytes(url: str) -> dict[str, Any] | None:
 
 
 def stream_reddit_analysis(
-    start_urls: list[str],
+    posts: list[dict[str, str | None]],
     custom_prompt: str,
-    max_items: int = 10,
+    max_items: int | None = None,
 ) -> Generator[str, None, None]:
     summary = {
         "total": 0,
@@ -80,7 +80,7 @@ def stream_reddit_analysis(
     )
 
     try:
-        items = _crawl_reddit_posts(start_urls=start_urls, max_items=max_items)
+        items = _crawl_reddit_posts(posts=posts, max_items=max_items)
     except Exception as exc:
         yield _to_ndjson(
             StreamEvent(
@@ -100,8 +100,9 @@ def stream_reddit_analysis(
     )
 
     client = genai.Client()
+    metadata_lookup = _build_metadata_lookup(posts)
 
-    for item in items:
+    for index, item in enumerate(items):
         title = item.get("title", "无标题")
         yield _to_ndjson(
             StreamEvent(
@@ -114,6 +115,7 @@ def stream_reddit_analysis(
             item=item,
             custom_prompt=custom_prompt,
             client=client,
+            input_metadata=_resolve_input_metadata(item=item, index=index, posts=posts, lookup=metadata_lookup),
         )
 
         if result.status == "success":
@@ -143,9 +145,13 @@ def process_single_reddit_item(
     item: dict[str, Any],
     custom_prompt: str,
     client: genai.Client,
+    input_metadata: dict[str, str | None] | None = None,
 ) -> PostAnalysisResult:
     title = item.get("title", "无标题")
     post_url = item.get("url") or item.get("permalink")
+    input_url = input_metadata.get("url") if input_metadata else None
+    input_title = input_metadata.get("title") if input_metadata else None
+    input_community = input_metadata.get("community") if input_metadata else None
 
     try:
         real_text = extract_real_text(item.get("body", ""))
@@ -154,6 +160,9 @@ def process_single_reddit_item(
             return PostAnalysisResult(
                 title=title,
                 url=post_url,
+                inputUrl=input_url,
+                inputTitle=input_title,
+                inputCommunity=input_community,
                 status="skipped",
                 reason="帖子已被原版块移除",
                 textPreview="",
@@ -168,6 +177,9 @@ def process_single_reddit_item(
             return PostAnalysisResult(
                 title=title,
                 url=post_url,
+                inputUrl=input_url,
+                inputTitle=input_title,
+                inputCommunity=input_community,
                 status="skipped",
                 reason="纯视频贴，不消耗大模型 Token",
                 textPreview="",
@@ -207,6 +219,9 @@ def process_single_reddit_item(
         return PostAnalysisResult(
             title=title,
             url=post_url,
+            inputUrl=input_url,
+            inputTitle=input_title,
+            inputCommunity=input_community,
             status="success",
             reason=None,
             textPreview=_make_text_preview(real_text),
@@ -217,6 +232,9 @@ def process_single_reddit_item(
         return PostAnalysisResult(
             title=title,
             url=post_url,
+            inputUrl=input_url,
+            inputTitle=input_title,
+            inputCommunity=input_community,
             status="failed",
             reason=f"Gemini 请求或帖子处理失败: {exc}",
             textPreview=None,
@@ -225,16 +243,16 @@ def process_single_reddit_item(
         )
 
 
-def _crawl_reddit_posts(start_urls: list[str], max_items: int) -> list[dict[str, Any]]:
+def _crawl_reddit_posts(posts: list[dict[str, str | None]], max_items: int | None) -> list[dict[str, Any]]:
     api_token = os.getenv("APIFY_API_TOKEN")
     if not api_token:
         raise RuntimeError("缺少环境变量 APIFY_API_TOKEN")
 
     apify_client = ApifyClient(api_token)
     run_input = {
-        "startUrls": [{"url": url} for url in start_urls],
+        "startUrls": [{"url": post["url"]} for post in posts if post.get("url")],
         "skipComments": True,
-        "maxItems": max_items,
+        "maxItems": max_items or len(posts),
         "proxy": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
     }
 
@@ -254,3 +272,43 @@ def _make_text_preview(text: str, limit: int = 240) -> str:
     if len(compact_text) <= limit:
         return compact_text
     return compact_text[:limit].rstrip() + "..."
+
+
+def _build_metadata_lookup(posts: list[dict[str, str | None]]) -> dict[str, dict[str, str | None]]:
+    lookup = {}
+    for post in posts:
+        url = post.get("url")
+        if url:
+            lookup[_normalize_url(url)] = post
+    return lookup
+
+
+def _resolve_input_metadata(
+    item: dict[str, Any],
+    index: int,
+    posts: list[dict[str, str | None]],
+    lookup: dict[str, dict[str, str | None]],
+) -> dict[str, str | None] | None:
+    candidates = [
+        item.get("url"),
+        item.get("permalink"),
+        item.get("link"),
+    ]
+
+    for candidate in candidates:
+        if candidate:
+            match = lookup.get(_normalize_url(str(candidate)))
+            if match:
+                return match
+
+    if index < len(posts):
+        return posts[index]
+
+    return None
+
+
+def _normalize_url(url: str) -> str:
+    normalized = url.strip()
+    if normalized.endswith("/"):
+        normalized = normalized[:-1]
+    return normalized

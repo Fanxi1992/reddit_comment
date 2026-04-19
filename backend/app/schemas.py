@@ -13,7 +13,7 @@ class AnalyzeRequest(BaseModel):
     posts: list[PostInput] | None = None
     startUrls: list[HttpUrl] | None = None
     customPrompt: str = Field(..., min_length=1)
-    maxItems: int = Field(default=10, ge=1, le=50)
+    maxItems: int | None = Field(default=None, ge=1, le=100)
 
     @model_validator(mode="after")
     def validate_posts_or_start_urls(self) -> "AnalyzeRequest":
@@ -25,6 +25,7 @@ class AnalyzeRequest(BaseModel):
 class PostAnalysisResult(BaseModel):
     title: str
     url: str | None = None
+    inputUrl: str | None = None
     inputTitle: str | None = None
     inputCommunity: str | None = None
     status: Literal["success", "skipped", "failed"]
