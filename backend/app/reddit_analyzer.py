@@ -101,8 +101,16 @@ def stream_reddit_analysis(
 
     client = genai.Client()
     metadata_lookup = _build_metadata_lookup(posts)
+    matched_input_urls: set[str] = set()
 
-    for index, item in enumerate(items):
+    for item in items:
+        input_metadata = _resolve_input_metadata(item=item, lookup=metadata_lookup)
+        if not input_metadata:
+            print(f"  [!] Apify item 无法匹配输入 URL，跳过: {item.get('url') or item.get('permalink') or item.get('link')}")
+            summary["skipped"] += 1
+            continue
+
+        matched_input_urls.add(_normalize_url(input_metadata["url"]))
         title = item.get("title", "无标题")
         yield _to_ndjson(
             StreamEvent(
@@ -115,7 +123,7 @@ def stream_reddit_analysis(
             item=item,
             custom_prompt=custom_prompt,
             client=client,
-            input_metadata=_resolve_input_metadata(item=item, index=index, posts=posts, lookup=metadata_lookup),
+            input_metadata=input_metadata,
         )
 
         if result.status == "success":
@@ -129,6 +137,30 @@ def stream_reddit_analysis(
             StreamEvent(
                 type="post_result",
                 result=result,
+            )
+        )
+
+    for post in posts:
+        normalized_input_url = _normalize_url(post["url"])
+        if normalized_input_url in matched_input_urls:
+            continue
+
+        summary["skipped"] += 1
+        yield _to_ndjson(
+            StreamEvent(
+                type="post_result",
+                result=PostAnalysisResult(
+                    title="帖子爬取出现问题",
+                    url=post["url"],
+                    inputUrl=post["url"],
+                    communityName=_derive_community_name(post["url"]),
+                    parsedCommunityName=_strip_community_prefix(_derive_community_name(post["url"])),
+                    status="skipped",
+                    reason="帖子爬取出现问题，已跳过",
+                    textPreview="",
+                    imageCount=0,
+                    analysis=None,
+                ),
             )
         )
 
@@ -280,29 +312,35 @@ def _build_metadata_lookup(posts: list[dict[str, str]]) -> dict[str, dict[str, s
         url = post.get("url")
         if url:
             lookup[_normalize_url(url)] = post
+            post_id = _extract_reddit_post_id(url)
+            if post_id:
+                lookup[post_id] = post
     return lookup
 
 
 def _resolve_input_metadata(
     item: dict[str, Any],
-    index: int,
-    posts: list[dict[str, str]],
     lookup: dict[str, dict[str, str]],
 ) -> dict[str, str] | None:
     candidates = [
         item.get("url"),
         item.get("permalink"),
         item.get("link"),
+        item.get("parsedId"),
+        item.get("id"),
     ]
 
     for candidate in candidates:
         if candidate:
-            match = lookup.get(_normalize_url(str(candidate)))
+            candidate_text = str(candidate)
+            match = lookup.get(_normalize_url(candidate_text))
             if match:
                 return match
 
-    if index < len(posts):
-        return posts[index]
+            post_id = _extract_reddit_post_id(candidate_text) or _strip_reddit_kind_prefix(candidate_text)
+            match = lookup.get(post_id) if post_id else None
+            if match:
+                return match
 
     return None
 
@@ -312,6 +350,24 @@ def _normalize_url(url: str) -> str:
     if normalized.endswith("/"):
         normalized = normalized[:-1]
     return normalized
+
+
+def _extract_reddit_post_id(value: str) -> str | None:
+    normalized = value.strip()
+    parts = [part for part in normalized.split("/") if part]
+    for index, part in enumerate(parts):
+        if part.lower() == "comments" and index + 1 < len(parts):
+            return parts[index + 1].lower()
+    return _strip_reddit_kind_prefix(normalized)
+
+
+def _strip_reddit_kind_prefix(value: str) -> str | None:
+    normalized = value.strip().lower()
+    if normalized.startswith("t3_"):
+        return normalized[3:]
+    if normalized and "/" not in normalized and "." not in normalized:
+        return normalized
+    return None
 
 
 def _derive_community_name(url: str) -> str | None:
