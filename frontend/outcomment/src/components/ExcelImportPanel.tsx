@@ -35,10 +35,10 @@ export function ExcelImportPanel({ onImport }: ExcelImportPanelProps) {
   }
 
   return (
-    <section className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2">
+    <section className="space-y-3">
+      <div className="grid gap-2 sm:grid-cols-2">
         <button
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800"
+          className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-slate-950 px-3 text-[11px] font-semibold text-white transition hover:bg-slate-800"
           onClick={() => inputRef.current?.click()}
           type="button"
         >
@@ -46,7 +46,7 @@ export function ExcelImportPanel({ onImport }: ExcelImportPanelProps) {
           选择 XLSX
         </button>
         <button
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-700"
+          className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-700"
           onClick={downloadExcelTemplate}
           type="button"
         >
@@ -64,7 +64,7 @@ export function ExcelImportPanel({ onImport }: ExcelImportPanelProps) {
       />
 
       {report && (
-        <div className="grid grid-cols-4 gap-2 rounded-md border border-slate-200 bg-white p-3 text-center">
+        <div className="grid grid-cols-4 gap-1.5 rounded-md border border-slate-200 bg-white p-2 text-center">
           <Metric label="总行数" value={report.totalRows} />
           <Metric label="有效" value={report.validRows} />
           <Metric label="重复" value={report.duplicateRows} />
@@ -73,7 +73,7 @@ export function ExcelImportPanel({ onImport }: ExcelImportPanelProps) {
       )}
 
       {error && (
-        <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+        <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-medium text-rose-700">
           {error}
         </div>
       )}
@@ -84,8 +84,8 @@ export function ExcelImportPanel({ onImport }: ExcelImportPanelProps) {
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div>
-      <div className="text-lg font-semibold text-slate-950">{value}</div>
-      <div className="text-xs font-medium text-slate-500">{label}</div>
+      <div className="text-sm font-semibold text-slate-950">{value}</div>
+      <div className="text-[10px] font-medium text-slate-500">{label}</div>
     </div>
   )
 }

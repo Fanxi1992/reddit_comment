@@ -165,7 +165,7 @@ export default function App() {
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-slate-950">帖子来源</h2>
-              <span className="text-xs font-semibold text-slate-500">
+              <span className="text-[11px] font-semibold text-slate-500">
                 有效 {submittablePosts.length} / 全部 {validatedPosts.length}
               </span>
             </div>
