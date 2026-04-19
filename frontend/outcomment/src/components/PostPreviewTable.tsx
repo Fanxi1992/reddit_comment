@@ -24,35 +24,35 @@ export function PostPreviewTable({ posts }: PostPreviewTableProps) {
         <span className="text-xs font-semibold text-slate-500">{posts.length} 条</span>
       </div>
 
-      <div className="max-h-80 overflow-auto rounded-md border border-slate-200 bg-white">
-        <table className="min-w-[560px] w-full table-fixed text-left text-sm">
+      <div className="max-h-64 overflow-hidden overflow-y-auto rounded-md border border-slate-200 bg-white">
+        <table className="w-full table-fixed text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
-              <th className="w-14 px-3 py-3">#</th>
-              <th className="px-3 py-3">帖子链接</th>
-              <th className="w-24 px-3 py-3">状态</th>
+              <th className="w-12 px-3 py-2">#</th>
+              <th className="px-3 py-2">帖子链接</th>
+              <th className="w-20 px-3 py-2">状态</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {posts.length === 0 ? (
               <tr>
-                <td className="px-3 py-6 text-center text-slate-500" colSpan={3}>
+                <td className="px-3 py-5 text-center text-slate-500" colSpan={3}>
                   暂无帖子
                 </td>
               </tr>
             ) : (
               posts.map((post, index) => (
                 <tr className="align-top" key={post.id}>
-                  <td className="px-3 py-3 text-slate-500">{index + 1}</td>
-                  <td className="px-3 py-3">
-                    <div className="truncate font-medium text-slate-900" title={post.url}>
+                  <td className="px-3 py-2 text-slate-500">{index + 1}</td>
+                  <td className="min-w-0 overflow-hidden px-3 py-2">
+                    <div className="max-w-full truncate font-medium text-slate-900" title={post.url}>
                       {post.url || '-'}
                     </div>
                     {post.validationMessage && (
                       <div className="mt-1 text-xs font-medium text-slate-500">{post.validationMessage}</div>
                     )}
                   </td>
-                  <td className="px-3 py-3">
+                  <td className="px-3 py-2">
                     <span
                       className={`inline-flex rounded-md px-2 py-1 text-xs font-semibold ring-1 ${
                         STATUS_STYLES[post.validationStatus]

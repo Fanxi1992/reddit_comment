@@ -35,8 +35,8 @@ export function AnalysisForm({
   const canSubmit = validCount > 0 && prompt.trim().length > 0 && !isRunning
 
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+    <section className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-slate-950">批次 Prompt</h2>
           <p className="mt-1 text-sm text-slate-500">当前 Prompt 会应用到下方所有有效帖子。</p>
@@ -44,12 +44,12 @@ export function AnalysisForm({
         <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">{prompt.length} 字符</span>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_220px]">
-        <div className="space-y-3">
+      <div className="grid gap-3 xl:grid-cols-[1fr_180px]">
+        <div className="space-y-2.5">
           <div className="flex flex-wrap gap-2">
             {PROMPT_TEMPLATES.map((template) => (
               <button
-                className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-teal-300 hover:text-teal-700"
+                className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-teal-300 hover:text-teal-700"
                 key={template.label}
                 onClick={() => onPromptChange(template.value)}
                 type="button"
@@ -61,7 +61,7 @@ export function AnalysisForm({
           </div>
 
           <textarea
-            className="min-h-32 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-3 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100"
+            className="min-h-24 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100"
             onChange={(event) => onPromptChange(event.target.value)}
             placeholder="请分析这些 Reddit 帖子的用户痛点、讨论焦点、潜在营销切入点，并给出可执行的内容建议。"
             value={prompt}

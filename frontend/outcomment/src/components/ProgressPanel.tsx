@@ -28,8 +28,8 @@ export function ProgressPanel({ stage, message, validCount, completedCount, summ
         : Math.min(96, Math.round((completedCount / denominator) * 100))
 
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-4">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <section className="rounded-md border border-slate-200 bg-white p-3.5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <StageIcon stage={stage} />
           <div>
@@ -52,7 +52,7 @@ export function ProgressPanel({ stage, message, validCount, completedCount, summ
       </div>
 
       {summary && (
-        <div className="mt-4 grid grid-cols-4 gap-2 text-center">
+        <div className="mt-3 grid grid-cols-4 gap-2 text-center">
           <Metric label="总数" value={summary.total} />
           <Metric label="成功" value={summary.processed} />
           <Metric label="跳过" value={summary.skipped} />
