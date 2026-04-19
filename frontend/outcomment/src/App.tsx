@@ -121,7 +121,7 @@ export default function App() {
     if (event.type === 'post_started') {
       setStage('analyzing')
       setMessage(event.message ?? '正在处理帖子')
-      setResults((current) => markFirstQueuedAsProcessing(current))
+      setResults((current) => markPostAsProcessing(current, event.inputUrl))
       return
     }
 
@@ -251,16 +251,15 @@ function StatusPill({ status }: { status: BackendStatus }) {
   return <span className={`rounded-md px-3 py-2 text-sm font-semibold ${styles[status]}`}>{labels[status]}</span>
 }
 
-function markFirstQueuedAsProcessing(results: ResultItem[]): ResultItem[] {
-  let marked = false
+function markPostAsProcessing(results: ResultItem[], inputUrl?: string): ResultItem[] {
+  if (!inputUrl) {
+    return results
+  }
 
-  return results.map((result) => {
-    if (!marked && result.status === 'queued') {
-      marked = true
-      return { ...result, status: 'processing' }
-    }
-    return result
-  })
+  const normalizedInputUrl = normalizeUrl(inputUrl)
+  return results.map((result) =>
+    normalizeUrl(result.input.url) === normalizedInputUrl ? { ...result, status: 'processing' } : result,
+  )
 }
 
 function mergeResult(current: ResultItem[], result: AnalysisResult, submittedPosts: PostInput[]): ResultItem[] {

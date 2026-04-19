@@ -43,6 +43,7 @@ class StreamEvent(BaseModel):
         "error",
     ]
     message: str | None = None
+    inputUrl: str | None = None
     total: int | None = None
     result: PostAnalysisResult | None = None
     summary: dict[str, int] | None = None

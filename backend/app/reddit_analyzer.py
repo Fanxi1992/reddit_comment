@@ -116,6 +116,7 @@ def stream_reddit_analysis(
             StreamEvent(
                 type="post_started",
                 message=f"正在处理帖子: {title[:60]}",
+                inputUrl=input_metadata["url"],
             )
         )
 

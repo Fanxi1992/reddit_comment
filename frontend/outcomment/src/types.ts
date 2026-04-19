@@ -61,6 +61,7 @@ export type StreamEvent =
   | {
       type: 'post_started'
       message?: string
+      inputUrl?: string
     }
   | {
       type: 'post_result'
