@@ -19,7 +19,7 @@ export function ManualPostEditor({ posts, onChange }: ManualPostEditorProps) {
 
   return (
     <section className="space-y-3">
-      <div className="max-h-[58vh] min-h-[420px] space-y-3 overflow-y-auto pr-1">
+      <div className="max-h-[70vh] min-h-[560px] space-y-3 overflow-y-auto pr-1">
         {posts.map((post, index) => (
           <div className="rounded-md border border-slate-200 bg-white p-3" key={post.id}>
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -42,20 +42,6 @@ export function ManualPostEditor({ posts, onChange }: ManualPostEditorProps) {
                 placeholder="帖子链接"
                 value={post.url}
               />
-              <div className="grid gap-2 sm:grid-cols-2">
-                <input
-                  className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100"
-                  onChange={(event) => updatePost(post.id, { title: event.target.value })}
-                  placeholder="帖子标题"
-                  value={post.title ?? ''}
-                />
-                <input
-                  className="h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100"
-                  onChange={(event) => updatePost(post.id, { community: event.target.value })}
-                  placeholder="帖子社区"
-                  value={post.community ?? ''}
-                />
-              </div>
               {post.validationStatus !== 'valid' && (
                 <p className="text-xs font-medium text-amber-700">{post.validationMessage}</p>
               )}
