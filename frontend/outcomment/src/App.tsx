@@ -8,8 +8,10 @@ import { PostPreviewTable } from './components/PostPreviewTable'
 import { ProgressPanel } from './components/ProgressPanel'
 import { ResultCard } from './components/ResultCard'
 import { streamAnalysis } from './lib/api'
+import { downloadAnalysisResults } from './lib/excel'
 import { createPostInput, getSubmittablePosts, normalizeUrl, validatePosts } from './lib/validation'
 import type { AnalysisResult, PostInput, ResultItem, StreamEvent, StreamSummary, TaskStage } from './types'
+import { DownloadIcon } from './components/icons'
 
 const DEFAULT_PROMPT = '请分析这些 Reddit 帖子的用户痛点、讨论焦点、潜在营销切入点，并给出可执行的内容建议。'
 
@@ -199,9 +201,20 @@ export default function App() {
           />
 
           <section className="min-w-0 space-y-3 overflow-hidden">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-base font-semibold text-slate-950">分析结果</h2>
-              <span className="text-xs font-semibold text-slate-500">{results.length} 张卡片</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-500">{results.length} 张卡片</span>
+                <button
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600 transition hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  disabled={stage !== 'completed' || results.length === 0}
+                  onClick={() => downloadAnalysisResults(results)}
+                  type="button"
+                >
+                  <DownloadIcon className="h-3.5 w-3.5" />
+                  导出结果
+                </button>
+              </div>
             </div>
 
             {results.length === 0 ? (
