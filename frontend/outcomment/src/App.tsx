@@ -160,11 +160,11 @@ export default function App() {
         </div>
       </header>
 
-      <div className="mx-auto grid w-full max-w-[1600px] gap-4 px-4 py-4 lg:grid-cols-[360px_minmax(0,1fr)] lg:px-6">
-        <aside className="min-w-0 space-y-4 rounded-md border border-slate-200 bg-white p-4 shadow-sm lg:sticky lg:top-4 lg:max-h-[calc(100vh-32px)] lg:overflow-y-auto">
+      <div className="mx-auto grid w-full max-w-[1600px] gap-4 px-4 py-4 lg:grid-cols-[340px_minmax(0,1fr)] lg:px-6">
+        <aside className="min-w-0 space-y-3 rounded-md border border-slate-200 bg-white p-3 shadow-sm lg:sticky lg:top-4 lg:max-h-[calc(100vh-32px)] lg:overflow-y-auto">
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-base font-semibold text-slate-950">帖子来源</h2>
+              <h2 className="text-sm font-semibold text-slate-950">帖子来源</h2>
               <span className="text-xs font-semibold text-slate-500">
                 有效 {submittablePosts.length} / 全部 {validatedPosts.length}
               </span>
@@ -198,7 +198,7 @@ export default function App() {
             validCount={submittablePosts.length}
           />
 
-          <section className="space-y-3">
+          <section className="min-w-0 space-y-3 overflow-hidden">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-base font-semibold text-slate-950">分析结果</h2>
               <span className="text-xs font-semibold text-slate-500">{results.length} 张卡片</span>
@@ -209,7 +209,7 @@ export default function App() {
                 等待任务提交
               </div>
             ) : (
-              <div className="grid gap-4">
+              <div className="grid min-w-0 gap-3 overflow-hidden">
                 {results.map((result) => (
                   <ResultCard item={result} key={result.id} />
                 ))}

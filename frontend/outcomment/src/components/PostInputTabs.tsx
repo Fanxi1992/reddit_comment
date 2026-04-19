@@ -13,7 +13,7 @@ export function PostInputTabs({ activeTab, onChange }: PostInputTabsProps) {
         ['excel', 'Excel 导入'],
       ].map(([value, label]) => (
         <button
-          className={`h-10 rounded-md text-sm font-semibold transition ${
+          className={`h-8 rounded-md text-xs font-semibold transition ${
             activeTab === value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'
           }`}
           key={value}
