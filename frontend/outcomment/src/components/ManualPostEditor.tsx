@@ -19,7 +19,7 @@ export function ManualPostEditor({ posts, onChange }: ManualPostEditorProps) {
 
   return (
     <section className="space-y-3">
-      <div className="max-h-[70vh] min-h-[560px] space-y-3 overflow-y-auto pr-1">
+      <div className="max-h-[65vh] min-h-[500px] space-y-3 overflow-y-auto pr-1">
         {posts.map((post, index) => (
           <div className="rounded-md border border-slate-200 bg-white p-3" key={post.id}>
             <div className="mb-3 flex items-center justify-between gap-3">
