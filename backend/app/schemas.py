@@ -5,8 +5,6 @@ from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 class PostInput(BaseModel):
     url: HttpUrl
-    title: str | None = None
-    community: str | None = None
 
 
 class AnalyzeRequest(BaseModel):
@@ -26,8 +24,8 @@ class PostAnalysisResult(BaseModel):
     title: str
     url: str | None = None
     inputUrl: str | None = None
-    inputTitle: str | None = None
-    inputCommunity: str | None = None
+    communityName: str | None = None
+    parsedCommunityName: str | None = None
     status: Literal["success", "skipped", "failed"]
     reason: str | None = None
     textPreview: str | None = None

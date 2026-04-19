@@ -61,7 +61,7 @@ def download_image_bytes(url: str) -> dict[str, Any] | None:
 
 
 def stream_reddit_analysis(
-    posts: list[dict[str, str | None]],
+    posts: list[dict[str, str]],
     custom_prompt: str,
     max_items: int | None = None,
 ) -> Generator[str, None, None]:
@@ -145,13 +145,13 @@ def process_single_reddit_item(
     item: dict[str, Any],
     custom_prompt: str,
     client: genai.Client,
-    input_metadata: dict[str, str | None] | None = None,
+    input_metadata: dict[str, str] | None = None,
 ) -> PostAnalysisResult:
     title = item.get("title", "无标题")
     post_url = item.get("url") or item.get("permalink")
     input_url = input_metadata.get("url") if input_metadata else None
-    input_title = input_metadata.get("title") if input_metadata else None
-    input_community = input_metadata.get("community") if input_metadata else None
+    community_name = item.get("communityName") or _derive_community_name(post_url or input_url or "")
+    parsed_community_name = item.get("parsedCommunityName") or _strip_community_prefix(community_name)
 
     try:
         real_text = extract_real_text(item.get("body", ""))
@@ -161,8 +161,8 @@ def process_single_reddit_item(
                 title=title,
                 url=post_url,
                 inputUrl=input_url,
-                inputTitle=input_title,
-                inputCommunity=input_community,
+                communityName=community_name,
+                parsedCommunityName=parsed_community_name,
                 status="skipped",
                 reason="帖子已被原版块移除",
                 textPreview="",
@@ -178,8 +178,8 @@ def process_single_reddit_item(
                 title=title,
                 url=post_url,
                 inputUrl=input_url,
-                inputTitle=input_title,
-                inputCommunity=input_community,
+                communityName=community_name,
+                parsedCommunityName=parsed_community_name,
                 status="skipped",
                 reason="纯视频贴，不消耗大模型 Token",
                 textPreview="",
@@ -220,8 +220,8 @@ def process_single_reddit_item(
             title=title,
             url=post_url,
             inputUrl=input_url,
-            inputTitle=input_title,
-            inputCommunity=input_community,
+            communityName=community_name,
+            parsedCommunityName=parsed_community_name,
             status="success",
             reason=None,
             textPreview=_make_text_preview(real_text),
@@ -233,8 +233,8 @@ def process_single_reddit_item(
             title=title,
             url=post_url,
             inputUrl=input_url,
-            inputTitle=input_title,
-            inputCommunity=input_community,
+            communityName=community_name,
+            parsedCommunityName=parsed_community_name,
             status="failed",
             reason=f"Gemini 请求或帖子处理失败: {exc}",
             textPreview=None,
@@ -243,7 +243,7 @@ def process_single_reddit_item(
         )
 
 
-def _crawl_reddit_posts(posts: list[dict[str, str | None]], max_items: int | None) -> list[dict[str, Any]]:
+def _crawl_reddit_posts(posts: list[dict[str, str]], max_items: int | None) -> list[dict[str, Any]]:
     api_token = os.getenv("APIFY_API_TOKEN")
     if not api_token:
         raise RuntimeError("缺少环境变量 APIFY_API_TOKEN")
@@ -274,7 +274,7 @@ def _make_text_preview(text: str, limit: int = 240) -> str:
     return compact_text[:limit].rstrip() + "..."
 
 
-def _build_metadata_lookup(posts: list[dict[str, str | None]]) -> dict[str, dict[str, str | None]]:
+def _build_metadata_lookup(posts: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     lookup = {}
     for post in posts:
         url = post.get("url")
@@ -286,9 +286,9 @@ def _build_metadata_lookup(posts: list[dict[str, str | None]]) -> dict[str, dict
 def _resolve_input_metadata(
     item: dict[str, Any],
     index: int,
-    posts: list[dict[str, str | None]],
-    lookup: dict[str, dict[str, str | None]],
-) -> dict[str, str | None] | None:
+    posts: list[dict[str, str]],
+    lookup: dict[str, dict[str, str]],
+) -> dict[str, str] | None:
     candidates = [
         item.get("url"),
         item.get("permalink"),
@@ -312,3 +312,17 @@ def _normalize_url(url: str) -> str:
     if normalized.endswith("/"):
         normalized = normalized[:-1]
     return normalized
+
+
+def _derive_community_name(url: str) -> str | None:
+    parts = url.split("/")
+    for index, part in enumerate(parts):
+        if part.lower() == "r" and index + 1 < len(parts):
+            return f"r/{parts[index + 1]}"
+    return None
+
+
+def _strip_community_prefix(community_name: str | None) -> str | None:
+    if not community_name:
+        return None
+    return community_name[2:] if community_name.startswith("r/") else community_name

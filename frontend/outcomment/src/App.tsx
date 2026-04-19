@@ -252,15 +252,14 @@ function markFirstQueuedAsProcessing(results: ResultItem[]): ResultItem[] {
 
 function mergeResult(current: ResultItem[], result: AnalysisResult, submittedPosts: PostInput[]): ResultItem[] {
   const targetUrl = normalizeUrl(result.inputUrl || result.url || '')
-  const matchedInput =
-    submittedPosts.find((post) => normalizeUrl(post.url) === targetUrl) ??
-    submittedPosts.find((post) => post.title && post.title === result.inputTitle) ??
-    submittedPosts.find((post) => post.community && post.community === result.inputCommunity)
+  const matchedInput = submittedPosts.find((post) => normalizeUrl(post.url) === targetUrl)
 
   const applyResult = (item: ResultItem): ResultItem => ({
     ...item,
     status: result.status,
     backendTitle: result.title,
+    communityName: result.communityName,
+    parsedCommunityName: result.parsedCommunityName,
     reason: result.reason,
     textPreview: result.textPreview,
     imageCount: result.imageCount,
@@ -273,8 +272,6 @@ function mergeResult(current: ResultItem[], result: AnalysisResult, submittedPos
 
   const fallbackInput = createPostInput('manual', {
     url: result.inputUrl || result.url || '',
-    title: result.inputTitle || result.title,
-    community: result.inputCommunity || '',
     validationStatus: 'valid',
   })
 

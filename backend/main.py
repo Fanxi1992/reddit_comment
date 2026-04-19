@@ -31,13 +31,11 @@ def analyze_reddit_posts(payload: AnalyzeRequest) -> StreamingResponse:
         [
             {
                 "url": str(post.url),
-                "title": post.title,
-                "community": post.community,
             }
             for post in payload.posts
         ]
         if payload.posts
-        else [{"url": str(url), "title": None, "community": None} for url in payload.startUrls or []]
+        else [{"url": str(url)} for url in payload.startUrls or []]
     )
 
     return StreamingResponse(

@@ -24,8 +24,8 @@ const STATUS_CLASS = {
 }
 
 export function ResultCard({ item }: ResultCardProps) {
-  const displayTitle = item.input.title || item.backendTitle || '无标题'
-  const community = item.input.community
+  const displayTitle = item.backendTitle || '无标题'
+  const community = item.communityName
 
   return (
     <article className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
@@ -47,9 +47,6 @@ export function ResultCard({ item }: ResultCardProps) {
           </div>
 
           <h3 className="line-clamp-2 text-base font-semibold leading-6 text-slate-950">{displayTitle}</h3>
-          {item.backendTitle && item.input.title && item.backendTitle !== item.input.title && (
-            <p className="mt-1 line-clamp-1 text-xs text-slate-500">Apify 标题：{item.backendTitle}</p>
-          )}
         </div>
       </div>
 

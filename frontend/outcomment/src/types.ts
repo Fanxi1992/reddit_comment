@@ -6,8 +6,6 @@ export type TaskStage = 'idle' | 'crawling' | 'analyzing' | 'completed' | 'faile
 export type PostInput = {
   id: string
   url: string
-  title?: string
-  community?: string
   source: PostSource
   validationStatus: ValidationStatus
   validationMessage?: string
@@ -15,16 +13,14 @@ export type PostInput = {
 
 export type PostPayload = {
   url: string
-  title?: string
-  community?: string
 }
 
 export type AnalysisResult = {
   title: string
   url?: string | null
   inputUrl?: string | null
-  inputTitle?: string | null
-  inputCommunity?: string | null
+  communityName?: string | null
+  parsedCommunityName?: string | null
   status: 'success' | 'skipped' | 'failed'
   reason?: string | null
   textPreview?: string | null
@@ -37,6 +33,8 @@ export type ResultItem = {
   input: PostInput
   status: AnalysisStatus
   backendTitle?: string
+  communityName?: string | null
+  parsedCommunityName?: string | null
   reason?: string | null
   textPreview?: string | null
   imageCount?: number

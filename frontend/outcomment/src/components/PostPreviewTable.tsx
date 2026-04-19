@@ -25,20 +25,18 @@ export function PostPreviewTable({ posts }: PostPreviewTableProps) {
       </div>
 
       <div className="max-h-80 overflow-auto rounded-md border border-slate-200 bg-white">
-        <table className="min-w-[760px] w-full table-fixed text-left text-sm">
+        <table className="min-w-[560px] w-full table-fixed text-left text-sm">
           <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
             <tr>
               <th className="w-14 px-3 py-3">#</th>
-              <th className="w-[42%] px-3 py-3">帖子链接</th>
-              <th className="w-[22%] px-3 py-3">帖子标题</th>
-              <th className="w-[16%] px-3 py-3">帖子社区</th>
+              <th className="px-3 py-3">帖子链接</th>
               <th className="w-24 px-3 py-3">状态</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {posts.length === 0 ? (
               <tr>
-                <td className="px-3 py-6 text-center text-slate-500" colSpan={5}>
+                <td className="px-3 py-6 text-center text-slate-500" colSpan={3}>
                   暂无帖子
                 </td>
               </tr>
@@ -54,12 +52,6 @@ export function PostPreviewTable({ posts }: PostPreviewTableProps) {
                       <div className="mt-1 text-xs font-medium text-slate-500">{post.validationMessage}</div>
                     )}
                   </td>
-                  <td className="px-3 py-3 text-slate-600">
-                    <div className="truncate" title={post.title}>
-                      {post.title || '-'}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3 text-slate-600">{post.community || '-'}</td>
                   <td className="px-3 py-3">
                     <span
                       className={`inline-flex rounded-md px-2 py-1 text-xs font-semibold ring-1 ${
