@@ -100,3 +100,20 @@ export function SparkIcon(props: IconProps) {
     </SvgIcon>
   )
 }
+
+export function CopyIcon(props: IconProps) {
+  return (
+    <SvgIcon {...props}>
+      <path d="M8 8h11v11H8z" />
+      <path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1" />
+    </SvgIcon>
+  )
+}
+
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <SvgIcon {...props}>
+      <path d="m6 9 6 6 6-6" />
+    </SvgIcon>
+  )
+}
