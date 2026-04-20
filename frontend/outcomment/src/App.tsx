@@ -14,6 +14,7 @@ import type { AnalysisResult, PostInput, ResultItem, StreamEvent, StreamSummary,
 import { DownloadIcon } from './components/icons'
 
 const DEFAULT_PROMPT = '请分析这些 Reddit 帖子的用户痛点、讨论焦点、潜在营销切入点，并给出可执行的内容建议。'
+const MAX_BATCH_POSTS = 50
 
 type BackendStatus = 'checking' | 'online' | 'offline'
 type InputTab = 'manual' | 'excel'
@@ -34,6 +35,7 @@ export default function App() {
   const submittablePosts = useMemo(() => getSubmittablePosts(validatedPosts), [validatedPosts])
   const completedCount = results.filter((result) => ['success', 'skipped', 'failed'].includes(result.status)).length
   const isRunning = stage === 'crawling' || stage === 'analyzing'
+  const isOverBatchLimit = submittablePosts.length > MAX_BATCH_POSTS
 
   useEffect(() => {
     let isMounted = true
@@ -65,6 +67,13 @@ export default function App() {
       return
     }
 
+    if (validPosts.length > MAX_BATCH_POSTS) {
+      setStage('failed')
+      setGlobalError(`单批最多支持 ${MAX_BATCH_POSTS} 条有效 Reddit 帖子链接，请减少或去重后再提交`)
+      setMessage('超过单批上限')
+      return
+    }
+
     const controller = new AbortController()
     abortRef.current = controller
     setStage('crawling')
@@ -89,7 +98,14 @@ export default function App() {
     } catch (exc) {
       if (controller.signal.aborted) {
         setMessage('任务已停止')
-        setStage('idle')
+        setStage('cancelled')
+        setResults((current) =>
+          current.map((item) =>
+            item.status === 'queued' || item.status === 'processing'
+              ? { ...item, status: 'skipped', reason: '任务已停止，未继续处理' }
+              : item,
+          ),
+        )
         return
       }
 
@@ -158,6 +174,11 @@ export default function App() {
             <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
               {submittablePosts.length} 条可提交
             </span>
+            {isOverBatchLimit && (
+              <span className="rounded-md bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">
+                超过单批上限 {MAX_BATCH_POSTS} 条
+              </span>
+            )}
           </div>
         </div>
       </header>
@@ -189,6 +210,7 @@ export default function App() {
             onSubmit={() => void handleSubmit()}
             prompt={prompt}
             validCount={submittablePosts.length}
+            maxBatchPosts={MAX_BATCH_POSTS}
           />
           <PostPreviewTable posts={validatedPosts} />
           <ProgressPanel

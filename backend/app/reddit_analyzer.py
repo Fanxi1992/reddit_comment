@@ -1,5 +1,8 @@
+import asyncio
+import contextlib
 import os
-from collections.abc import Generator
+import time
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
 import requests
@@ -12,8 +15,21 @@ from app.schemas import PostAnalysisResult, StreamEvent
 
 
 APIFY_ACTOR_ID = "oAuCIx3ItNrs2okjQ"
+MAX_POSTS_PER_BATCH = 50
+APIFY_TIMEOUT_SECONDS = 15 * 60
+APIFY_POLL_SECONDS = 5
+GEMINI_TIMEOUT_SECONDS = 2 * 60
+GEMINI_TIMEOUT_MESSAGE = "Gemini 单帖处理超过 2 分钟，已跳过"
 
 load_dotenv()
+
+
+class AnalysisCancelled(Exception):
+    pass
+
+
+class ApifyRunTimeoutError(TimeoutError):
+    pass
 
 
 def extract_real_text(body_str: str | None) -> str:
@@ -60,13 +76,15 @@ def download_image_bytes(url: str) -> dict[str, Any] | None:
         return None
 
 
-def stream_reddit_analysis(
+async def stream_reddit_analysis(
     posts: list[dict[str, str]],
     custom_prompt: str,
     max_items: int | None = None,
-) -> Generator[str, None, None]:
+    should_stop: Callable[[], Awaitable[bool]] | None = None,
+) -> AsyncGenerator[str, None]:
+    posts = _dedupe_posts(posts)
     summary = {
-        "total": 0,
+        "total": len(posts),
         "processed": 0,
         "skipped": 0,
         "failed": 0,
@@ -80,7 +98,17 @@ def stream_reddit_analysis(
     )
 
     try:
-        items = _crawl_reddit_posts(posts=posts, max_items=max_items)
+        items = await _crawl_reddit_posts(posts=posts, max_items=max_items, should_stop=should_stop)
+    except AnalysisCancelled:
+        return
+    except ApifyRunTimeoutError:
+        yield _to_ndjson(
+            StreamEvent(
+                type="error",
+                message="Apify 批量爬取超过 15 分钟，任务已终止",
+            )
+        )
+        return
     except Exception as exc:
         yield _to_ndjson(
             StreamEvent(
@@ -90,7 +118,6 @@ def stream_reddit_analysis(
         )
         return
 
-    summary["total"] = len(items)
     yield _to_ndjson(
         StreamEvent(
             type="crawl_completed",
@@ -99,15 +126,16 @@ def stream_reddit_analysis(
         )
     )
 
-    client = genai.Client()
     metadata_lookup = _build_metadata_lookup(posts)
     matched_input_urls: set[str] = set()
 
     for item in items:
+        if await _should_stop(should_stop):
+            return
+
         input_metadata = _resolve_input_metadata(item=item, lookup=metadata_lookup)
         if not input_metadata:
             print(f"  [!] Apify item 无法匹配输入 URL，跳过: {item.get('url') or item.get('permalink') or item.get('link')}")
-            summary["skipped"] += 1
             continue
 
         matched_input_urls.add(_normalize_url(input_metadata["url"]))
@@ -120,10 +148,12 @@ def stream_reddit_analysis(
             )
         )
 
-        result = process_single_reddit_item(
+        if await _should_stop(should_stop):
+            return
+
+        result = await process_single_reddit_item_with_timeout(
             item=item,
             custom_prompt=custom_prompt,
-            client=client,
             input_metadata=input_metadata,
         )
 
@@ -142,6 +172,9 @@ def stream_reddit_analysis(
         )
 
     for post in posts:
+        if await _should_stop(should_stop):
+            return
+
         normalized_input_url = _normalize_url(post["url"])
         if normalized_input_url in matched_input_urls:
             continue
@@ -171,6 +204,43 @@ def stream_reddit_analysis(
             message="分析完成",
             summary=summary,
         )
+    )
+
+
+async def process_single_reddit_item_with_timeout(
+    item: dict[str, Any],
+    custom_prompt: str,
+    input_metadata: dict[str, str] | None = None,
+) -> PostAnalysisResult:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _process_single_reddit_item_with_new_client,
+                item,
+                custom_prompt,
+                input_metadata,
+            ),
+            timeout=GEMINI_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        return _make_failed_post_result(
+            item=item,
+            input_metadata=input_metadata,
+            reason=GEMINI_TIMEOUT_MESSAGE,
+        )
+
+
+def _process_single_reddit_item_with_new_client(
+    item: dict[str, Any],
+    custom_prompt: str,
+    input_metadata: dict[str, str] | None = None,
+) -> PostAnalysisResult:
+    client = genai.Client(http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_SECONDS * 1000))
+    return process_single_reddit_item(
+        item=item,
+        custom_prompt=custom_prompt,
+        client=client,
+        input_metadata=input_metadata,
     )
 
 
@@ -264,6 +334,10 @@ def process_single_reddit_item(
             analysis=analysis,
         )
     except Exception as exc:
+        reason = f"Gemini 请求或帖子处理失败: {exc}"
+        if _looks_like_timeout(exc):
+            reason = GEMINI_TIMEOUT_MESSAGE
+
         return PostAnalysisResult(
             title=title,
             url=post_url,
@@ -271,14 +345,18 @@ def process_single_reddit_item(
             communityName=community_name,
             parsedCommunityName=parsed_community_name,
             status="failed",
-            reason=f"Gemini 请求或帖子处理失败: {exc}",
+            reason=reason,
             textPreview=None,
             imageCount=0,
             analysis=None,
         )
 
 
-def _crawl_reddit_posts(posts: list[dict[str, str]], max_items: int | None) -> list[dict[str, Any]]:
+async def _crawl_reddit_posts(
+    posts: list[dict[str, str]],
+    max_items: int | None,
+    should_stop: Callable[[], Awaitable[bool]] | None = None,
+) -> list[dict[str, Any]]:
     api_token = os.getenv("APIFY_API_TOKEN")
     if not api_token:
         raise RuntimeError("缺少环境变量 APIFY_API_TOKEN")
@@ -287,12 +365,107 @@ def _crawl_reddit_posts(posts: list[dict[str, str]], max_items: int | None) -> l
     run_input = {
         "startUrls": [{"url": post["url"]} for post in posts if post.get("url")],
         "skipComments": True,
-        "maxItems": max_items or len(posts),
+        "maxItems": len(posts),
         "proxy": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]},
     }
 
-    run = apify_client.actor(APIFY_ACTOR_ID).call(run_input=run_input)
-    return list(apify_client.dataset(run["defaultDatasetId"]).iterate_items())
+    run_client = None
+    started_at = time.monotonic()
+
+    try:
+        run = await asyncio.to_thread(
+            apify_client.actor(APIFY_ACTOR_ID).start,
+            run_input=run_input,
+            timeout_secs=APIFY_TIMEOUT_SECONDS,
+        )
+        run_client = apify_client.run(run["id"])
+
+        while True:
+            if await _should_stop(should_stop):
+                await _abort_apify_run(run_client)
+                raise AnalysisCancelled()
+
+            if time.monotonic() - started_at > APIFY_TIMEOUT_SECONDS:
+                await _abort_apify_run(run_client)
+                raise ApifyRunTimeoutError()
+
+            finished_run = await asyncio.to_thread(run_client.wait_for_finish, wait_secs=APIFY_POLL_SECONDS)
+            if not finished_run:
+                continue
+
+            status = finished_run.get("status")
+            if status not in {"SUCCEEDED", "FAILED", "TIMED-OUT", "TIMED_OUT", "ABORTED"}:
+                continue
+
+            if status == "SUCCEEDED":
+                dataset_id = finished_run.get("defaultDatasetId")
+                if not dataset_id:
+                    return []
+                return await asyncio.to_thread(
+                    lambda: list(apify_client.dataset(dataset_id).iterate_items())
+                )
+
+            raise RuntimeError(f"Apify run 状态异常: {status or 'UNKNOWN'}")
+    except asyncio.CancelledError:
+        if run_client:
+            with contextlib.suppress(Exception):
+                await _abort_apify_run(run_client)
+        raise
+
+
+async def _should_stop(should_stop: Callable[[], Awaitable[bool]] | None) -> bool:
+    if not should_stop:
+        return False
+    return await should_stop()
+
+
+async def _abort_apify_run(run_client: Any) -> None:
+    with contextlib.suppress(Exception):
+        await asyncio.to_thread(run_client.abort, gracefully=True)
+
+
+def _dedupe_posts(posts: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen = set()
+    deduped = []
+
+    for post in posts:
+        url = post.get("url", "").strip()
+        if not url:
+            continue
+
+        normalized_url = _normalize_url(url)
+        if normalized_url in seen:
+            continue
+
+        seen.add(normalized_url)
+        deduped.append({"url": url})
+
+    return deduped
+
+
+def _make_failed_post_result(
+    item: dict[str, Any],
+    input_metadata: dict[str, str] | None,
+    reason: str,
+) -> PostAnalysisResult:
+    title = item.get("title", "无标题")
+    post_url = item.get("url") or item.get("permalink")
+    input_url = input_metadata.get("url") if input_metadata else None
+    community_name = item.get("communityName") or _derive_community_name(post_url or input_url or "")
+    parsed_community_name = item.get("parsedCommunityName") or _strip_community_prefix(community_name)
+
+    return PostAnalysisResult(
+        title=title,
+        url=post_url,
+        inputUrl=input_url,
+        communityName=community_name,
+        parsedCommunityName=parsed_community_name,
+        status="failed",
+        reason=reason,
+        textPreview=None,
+        imageCount=0,
+        analysis=None,
+    )
 
 
 def _to_ndjson(event: StreamEvent) -> str:
@@ -307,6 +480,11 @@ def _make_text_preview(text: str, limit: int = 240) -> str:
     if len(compact_text) <= limit:
         return compact_text
     return compact_text[:limit].rstrip() + "..."
+
+
+def _looks_like_timeout(exc: Exception) -> bool:
+    exc_text = f"{type(exc).__name__} {exc}".lower()
+    return "timeout" in exc_text or "timed out" in exc_text
 
 
 def _build_metadata_lookup(posts: list[dict[str, str]]) -> dict[str, dict[str, str]]:
@@ -352,7 +530,7 @@ def _normalize_url(url: str) -> str:
     normalized = url.strip()
     if normalized.endswith("/"):
         normalized = normalized[:-1]
-    return normalized
+    return normalized.lower()
 
 
 def _extract_reddit_post_id(value: str) -> str | None:

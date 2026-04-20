@@ -30,7 +30,7 @@ export async function streamAnalysis({
   })
 
   if (!response.ok) {
-    const errorText = await response.text()
+    const errorText = await readErrorMessage(response)
     throw new Error(errorText || `请求失败：${response.status}`)
   }
 
@@ -65,4 +65,26 @@ export async function streamAnalysis({
   if (buffer.trim()) {
     onEvent(JSON.parse(buffer.trim()) as StreamEvent)
   }
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload = await response.clone().json()
+    const detail = payload?.detail
+
+    if (typeof detail === 'string') {
+      return detail
+    }
+
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => item?.msg || item?.message || JSON.stringify(item))
+        .filter(Boolean)
+        .join('；')
+    }
+  } catch {
+    // Fall back to plain text below.
+  }
+
+  return response.text()
 }

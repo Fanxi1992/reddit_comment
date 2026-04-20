@@ -1,5 +1,5 @@
 import type { StreamSummary, TaskStage } from '../types'
-import { AlertIcon, CheckIcon, ClockIcon } from './icons'
+import { AlertIcon, CheckIcon, ClockIcon, StopIcon } from './icons'
 
 type ProgressPanelProps = {
   stage: TaskStage
@@ -16,6 +16,7 @@ const STAGE_LABELS: Record<TaskStage, string> = {
   analyzing: '逐帖分析中',
   completed: '完成',
   failed: '失败',
+  cancelled: '已停止',
 }
 
 export function ProgressPanel({ stage, message, validCount, completedCount, summary, error }: ProgressPanelProps) {
@@ -45,7 +46,13 @@ export function ProgressPanel({ stage, message, validCount, completedCount, summ
       <div className="h-2 overflow-hidden rounded-full bg-slate-100">
         <div
           className={`h-full rounded-full transition-all duration-500 ${
-            stage === 'failed' ? 'bg-rose-500' : stage === 'completed' ? 'bg-emerald-500' : 'bg-teal-500'
+            stage === 'failed'
+              ? 'bg-rose-500'
+              : stage === 'completed'
+                ? 'bg-emerald-500'
+                : stage === 'cancelled'
+                  ? 'bg-slate-400'
+                  : 'bg-teal-500'
           }`}
           style={{ width: `${progress}%` }}
         />
@@ -81,6 +88,14 @@ function StageIcon({ stage }: { stage: TaskStage }) {
     return (
       <span className={`${baseClass} bg-rose-50 text-rose-700`}>
         <AlertIcon className={className} />
+      </span>
+    )
+  }
+
+  if (stage === 'cancelled') {
+    return (
+      <span className={`${baseClass} bg-slate-100 text-slate-600`}>
+        <StopIcon className={className} />
       </span>
     )
   }

@@ -3,6 +3,7 @@ import { PlayIcon, SparkIcon, StopIcon } from './icons'
 type AnalysisFormProps = {
   prompt: string
   validCount: number
+  maxBatchPosts: number
   isRunning: boolean
   onPromptChange: (prompt: string) => void
   onSubmit: () => void
@@ -27,22 +28,32 @@ const PROMPT_TEMPLATES = [
 export function AnalysisForm({
   prompt,
   validCount,
+  maxBatchPosts,
   isRunning,
   onPromptChange,
   onSubmit,
   onCancel,
 }: AnalysisFormProps) {
-  const canSubmit = validCount > 0 && prompt.trim().length > 0 && !isRunning
+  const isOverLimit = validCount > maxBatchPosts
+  const canSubmit = validCount > 0 && prompt.trim().length > 0 && !isRunning && !isOverLimit
 
   return (
     <section className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-slate-950">批次 Prompt</h2>
-          <p className="mt-1 text-sm text-slate-500">当前 Prompt 会应用到下方所有有效帖子。</p>
+          <p className="mt-1 text-sm text-slate-500">
+            当前 Prompt 会应用到下方所有有效帖子，单批最多 {maxBatchPosts} 条，重复链接不会提交。
+          </p>
         </div>
         <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">{prompt.length} 字符</span>
       </div>
+
+      {isOverLimit && (
+        <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+          当前有 {validCount} 条有效链接，超过单批上限 {maxBatchPosts} 条，请减少或去重后再提交。
+        </div>
+      )}
 
       <div className="grid gap-3 xl:grid-cols-[1fr_180px]">
         <div className="space-y-2.5">

@@ -1,7 +1,7 @@
 export type PostSource = 'manual' | 'excel'
 export type ValidationStatus = 'valid' | 'invalid' | 'duplicate'
 export type AnalysisStatus = 'queued' | 'processing' | 'success' | 'skipped' | 'failed'
-export type TaskStage = 'idle' | 'crawling' | 'analyzing' | 'completed' | 'failed'
+export type TaskStage = 'idle' | 'crawling' | 'analyzing' | 'completed' | 'failed' | 'cancelled'
 
 export type PostInput = {
   id: string
