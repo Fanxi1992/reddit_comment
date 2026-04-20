@@ -1,4 +1,4 @@
-import { PlayIcon, SparkIcon, StopIcon } from './icons'
+import { PlayIcon, StopIcon } from './icons'
 
 type AnalysisFormProps = {
   prompt: string
@@ -10,20 +10,8 @@ type AnalysisFormProps = {
   onCancel: () => void
 }
 
-const PROMPT_TEMPLATES = [
-  {
-    label: '用户痛点',
-    value: '请分析这些 Reddit 帖子的用户痛点、抱怨、未被满足的需求，并整理成可用于产品和内容策略的洞察。',
-  },
-  {
-    label: '营销角度',
-    value: '请总结这些 Reddit 帖子的讨论焦点，提炼可用于营销文案、广告钩子和内容选题的切入点。',
-  },
-  {
-    label: '竞品洞察',
-    value: '请从这些 Reddit 帖子里识别竞品、替代方案、用户选择标准和潜在市场机会。',
-  },
-]
+const PROMPT_PLACEHOLDER =
+  '这里请根据你实际产品和客户的需求，键入针对性的提示词。\n\nGemini 已经获得了当前帖子的全部内容，包括文本和图片（如有）。你需要编辑提示词，让 Gemini 生成符合要求的截流评论。\n\n常见需要提及的内容包括：任务背景、客户的特殊要求、评论长短控制、语气控制、移动端打字特点等。'
 
 export function AnalysisForm({
   prompt,
@@ -41,9 +29,9 @@ export function AnalysisForm({
     <section className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-slate-950">批次 Prompt</h2>
+          <h2 className="text-base font-semibold text-slate-950">针对性评论生成提示词</h2>
           <p className="mt-1 text-sm text-slate-500">
-            当前 Prompt 会应用到下方所有有效帖子，单批最多 {maxBatchPosts} 条，重复链接不会提交。
+            当前提示词会应用到下方所有有效帖子，单批最多 {maxBatchPosts} 条，重复链接不会提交。
           </p>
         </div>
         <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">{prompt.length} 字符</span>
@@ -56,25 +44,11 @@ export function AnalysisForm({
       )}
 
       <div className="grid gap-3 xl:grid-cols-[1fr_180px]">
-        <div className="space-y-2.5">
-          <div className="flex flex-wrap gap-2">
-            {PROMPT_TEMPLATES.map((template) => (
-              <button
-                className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-teal-300 hover:text-teal-700"
-                key={template.label}
-                onClick={() => onPromptChange(template.value)}
-                type="button"
-              >
-                <SparkIcon />
-                {template.label}
-              </button>
-            ))}
-          </div>
-
+        <div>
           <textarea
-            className="min-h-24 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100"
+            className="min-h-36 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2.5 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500 focus:ring-4 focus:ring-teal-100"
             onChange={(event) => onPromptChange(event.target.value)}
-            placeholder="请分析这些 Reddit 帖子的用户痛点、讨论焦点、潜在营销切入点，并给出可执行的内容建议。"
+            placeholder={PROMPT_PLACEHOLDER}
             value={prompt}
           />
         </div>

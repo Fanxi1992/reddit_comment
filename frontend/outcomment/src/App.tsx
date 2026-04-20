@@ -13,7 +13,6 @@ import { createPostInput, getSubmittablePosts, normalizeUrl, validatePosts } fro
 import type { AnalysisResult, PostInput, ResultItem, StreamEvent, StreamSummary, TaskStage } from './types'
 import { DownloadIcon } from './components/icons'
 
-const DEFAULT_PROMPT = '请分析这些 Reddit 帖子的用户痛点、讨论焦点、潜在营销切入点，并给出可执行的内容建议。'
 const MAX_BATCH_POSTS = 50
 
 type BackendStatus = 'checking' | 'online' | 'offline'
@@ -22,7 +21,7 @@ type InputTab = 'manual' | 'excel'
 export default function App() {
   const [posts, setPosts] = useState<PostInput[]>(() => validatePosts([createPostInput('manual')]))
   const [activeTab, setActiveTab] = useState<InputTab>('manual')
-  const [prompt, setPrompt] = useState(DEFAULT_PROMPT)
+  const [prompt, setPrompt] = useState('')
   const [stage, setStage] = useState<TaskStage>('idle')
   const [message, setMessage] = useState('准备就绪')
   const [summary, setSummary] = useState<StreamSummary | null>(null)
