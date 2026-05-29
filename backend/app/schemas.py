@@ -117,3 +117,33 @@ class RedditSearchSummary(BaseModel):
     failedQueries: int
     rawUrlCount: int
     uniqueUrlCount: int
+
+
+CommentDecisionStatus = Literal["success", "skipped", "failed"]
+
+
+class CommentDecisionRequest(BaseModel):
+    productContext: QueryPlanGenerateRequest
+    queries: list[PlannedQuery] = Field(..., min_length=1, max_length=50)
+    searchResults: list[RedditSearchResultItem] = Field(..., min_length=1, max_length=500)
+    maxSuggestions: int | None = Field(default=None, ge=1, le=200)
+
+
+class CommentDecisionResult(BaseModel):
+    postUrl: str
+    sourceQuery: str
+    subreddit: str | None = None
+    title: str | None = None
+    status: CommentDecisionStatus
+    reason: str | None = None
+    commentUrl: str | None = None
+    commentText: str | None = None
+    environmentId: str | None = None
+
+
+class CommentDecisionSummary(BaseModel):
+    totalPosts: int
+    processedPosts: int
+    successCount: int
+    skippedCount: int
+    failedCount: int

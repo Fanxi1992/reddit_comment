@@ -6,11 +6,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from app.comment_decision_runner import encode_ndjson as encode_comment_ndjson
+from app.comment_decision_runner import run_comment_decision_stream
 from app.query_planner import generate_query_plan
 from app.reddit_analyzer import MAX_POSTS_PER_BATCH, stream_reddit_analysis
 from app.reddit_searcher import encode_ndjson, run_reddit_search_batch
 from app.schemas import (
     AnalyzeRequest,
+    CommentDecisionRequest,
     QueryPlanGenerateRequest,
     QueryPlanGenerateResponse,
     RedditSearchRequest,
@@ -19,6 +22,7 @@ from app.schemas import (
 
 MAX_CONCURRENT_ANALYSES = 3
 MAX_CONCURRENT_REDDIT_SEARCHES = 1
+MAX_CONCURRENT_COMMENT_DECISIONS = 1
 
 
 class AnalysisTaskLimiter:
@@ -41,6 +45,7 @@ class AnalysisTaskLimiter:
 
 task_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_ANALYSES)
 reddit_search_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_REDDIT_SEARCHES)
+comment_decision_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_COMMENT_DECISIONS)
 
 
 app = FastAPI(title="Reddit Insight Analyzer API")
@@ -98,6 +103,40 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
             yield encode_ndjson({"type": "error", "message": f"Reddit 搜索失败: {exc}"})
         finally:
             reddit_search_limiter.release()
+
+    return StreamingResponse(
+        stream_with_release(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/comment-decisions/stream")
+async def stream_comment_decisions(payload: CommentDecisionRequest, request: Request) -> StreamingResponse:
+    if not comment_decision_limiter.try_acquire():
+        raise HTTPException(status_code=429, detail="当前已有评论决策任务正在运行，请稍后再试")
+
+    async def stream_with_release():
+        iterator = None
+        try:
+            iterator = run_comment_decision_stream(payload)
+            while True:
+                if await request.is_disconnected():
+                    if hasattr(iterator, "close"):
+                        iterator.close()
+                    yield encode_comment_ndjson({"type": "error", "message": "客户端已断开连接，评论决策任务停止"})
+                    return
+
+                event = await asyncio.to_thread(_next_stream_event, iterator)
+                if event is None:
+                    return
+                yield encode_comment_ndjson(event)
+        except Exception as exc:
+            yield encode_comment_ndjson({"type": "error", "message": f"评论决策失败: {exc}"})
+        finally:
+            if iterator is not None and hasattr(iterator, "close"):
+                iterator.close()
+            comment_decision_limiter.release()
 
     return StreamingResponse(
         stream_with_release(),

@@ -1,0 +1,443 @@
+import json
+import os
+import queue
+import random
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any, Iterator
+
+import requests
+from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
+
+from app.comment_decider import generate_comment_decision
+from app.reddit_detail_collector import LoadedCommentTreeExtractor, PostDetailObservationCollector
+from app.reddit_searcher import normalize_post_url
+from app.schemas import CommentDecisionRequest, RedditSearchResultItem
+
+
+MAX_COMMENTS_PER_POST = 30
+DEFAULT_DETAIL_ENV_CONCURRENCY = 3
+
+load_dotenv()
+
+
+@dataclass
+class AdsPowerProfile:
+    env_id: str
+    api_url: str
+    api_key: str
+    user_id: str
+    target_url: str = "https://www.reddit.com"
+
+
+class DetailEnvironmentRunner:
+    def __init__(self, profile: AdsPowerProfile) -> None:
+        self.profile = profile
+        self.detail_observer = PostDetailObservationCollector()
+        self.comment_extractor = LoadedCommentTreeExtractor()
+        self._playwright = None
+        self._browser = None
+        self._context = None
+
+    def __enter__(self) -> "DetailEnvironmentRunner":
+        ws_url = self._start_browser()
+        if not ws_url:
+            raise RuntimeError("adspower_browser_start_failed")
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.connect_over_cdp(ws_url)
+        self._context = self._browser.contexts[0] if self._browser.contexts else self._browser.new_context()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        try:
+            if self._browser:
+                self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._playwright:
+                self._playwright.stop()
+        except Exception:
+            pass
+        self._stop_browser()
+
+    def collect_detail(self, item: RedditSearchResultItem) -> dict[str, Any]:
+        if self._context is None:
+            raise RuntimeError("browser_context_not_initialized")
+
+        page = self._context.new_page()
+        try:
+            page.goto(item.postUrl, wait_until="commit", timeout=20000)
+            page.wait_for_load_state("domcontentloaded", timeout=20000)
+            self._wait_for_detail_post(page)
+            time.sleep(random.uniform(0.8, 1.3))
+            observation = self.detail_observer.collect(page, origin="comment_decision")
+            comment_tree = self.comment_extractor.collect(page, total_comment_count=observation.comments or 0)
+            limited_comment_tree = comment_tree.to_limited_dict(MAX_COMMENTS_PER_POST)
+            return {
+                "status": "success",
+                "reason": "",
+                "post_url": normalize_post_url(item.postUrl) or item.postUrl,
+                "final_url": page.url,
+                "title": observation.title,
+                "subreddit": observation.subreddit,
+                "author": observation.author,
+                "flair": observation.flair,
+                "post_type": observation.post_type,
+                "body_text": observation.body_text,
+                "body_length": observation.body_length,
+                "media_urls": observation.media_urls,
+                "outbound_url": observation.outbound_url,
+                "upvotes": observation.upvotes,
+                "comments": observation.comments,
+                "comment_tree": limited_comment_tree,
+                "loaded_comment_count": comment_tree.loaded_comment_count,
+                "included_comment_count": int(limited_comment_tree.get("included_comment_count") or 0),
+                "top_level_comment_count": comment_tree.top_level_count,
+                "max_comment_depth": comment_tree.max_depth,
+            }
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "reason": str(exc),
+                "post_url": normalize_post_url(item.postUrl) or item.postUrl,
+                "final_url": page.url if not page.is_closed() else "",
+                "title": item.title,
+                "subreddit": item.subreddit,
+                "body_text": "",
+                "body_length": 0,
+                "media_urls": [],
+                "comment_tree": {},
+                "loaded_comment_count": 0,
+                "included_comment_count": 0,
+                "top_level_comment_count": 0,
+                "max_comment_depth": 0,
+            }
+        finally:
+            try:
+                if not page.is_closed():
+                    page.close()
+            except Exception:
+                pass
+
+    def _wait_for_detail_post(self, page) -> None:
+        post = page.locator("shreddit-post").first
+        post.wait_for(state="visible", timeout=15000)
+        if "/comments/" not in page.url:
+            deadline = time.time() + 8.0
+            while time.time() < deadline:
+                if "/comments/" in page.url:
+                    return
+                time.sleep(0.1)
+            raise RuntimeError(f"detail_url_not_reached:{page.url}")
+
+    def _start_browser(self) -> str | None:
+        url = f"{self.profile.api_url}/api/v1/browser/start"
+        headers = {"Authorization": f"Bearer {self.profile.api_key}"}
+        params = {"user_id": self.profile.user_id, "headless": 0}
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return None
+        if payload.get("code") != 0:
+            return None
+        return payload.get("data", {}).get("ws", {}).get("puppeteer")
+
+    def _stop_browser(self) -> bool:
+        url = f"{self.profile.api_url}/api/v1/browser/stop"
+        headers = {"Authorization": f"Bearer {self.profile.api_key}"}
+        params = {"user_id": self.profile.user_id}
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return False
+        return payload.get("code") == 0
+
+
+def run_comment_decision_stream(payload: CommentDecisionRequest) -> Iterator[dict[str, Any]]:
+    profiles = load_adspower_profiles()
+    search_results = _dedupe_search_results(payload.searchResults)
+    if not search_results:
+        raise RuntimeError("没有可处理的去重 Reddit URL")
+
+    requested_concurrency = _load_detail_concurrency()
+    profiles = profiles[: min(requested_concurrency, len(profiles), len(search_results))]
+    chunks = _chunk_evenly(search_results, len(profiles))
+    event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    stop_event = threading.Event()
+    success_budget = {"count": 0}
+    success_lock = threading.Lock()
+    threads: list[threading.Thread] = []
+
+    yield {
+        "type": "decision_started",
+        "totalPosts": len(search_results),
+        "environmentCount": len(profiles),
+        "maxSuggestions": payload.maxSuggestions,
+    }
+
+    for index, (profile, chunk) in enumerate(zip(profiles, chunks, strict=False), start=1):
+        thread = threading.Thread(
+            target=_run_environment_worker,
+            args=(payload, profile, index, chunk, event_queue, stop_event, success_budget, success_lock),
+            daemon=True,
+        )
+        threads.append(thread)
+        thread.start()
+
+    completed_workers = 0
+    summary = {
+        "totalPosts": len(search_results),
+        "processedPosts": 0,
+        "successCount": 0,
+        "skippedCount": 0,
+        "failedCount": 0,
+    }
+    successful_results: list[dict[str, Any]] = []
+
+    try:
+        while completed_workers < len(threads):
+            event = event_queue.get()
+            if event is None:
+                completed_workers += 1
+                continue
+            if event.get("type") == "post_result":
+                result = event.get("result") or {}
+                summary["processedPosts"] += 1
+                if result.get("status") == "success":
+                    summary["successCount"] += 1
+                    successful_results.append(result)
+                elif result.get("status") == "skipped":
+                    summary["skippedCount"] += 1
+                else:
+                    summary["failedCount"] += 1
+            yield event
+        yield {"type": "done", "summary": summary, "results": successful_results}
+    finally:
+        stop_event.set()
+        for thread in threads:
+            thread.join(timeout=1)
+
+
+def _run_environment_worker(
+    payload: CommentDecisionRequest,
+    profile: AdsPowerProfile,
+    environment_index: int,
+    items: list[RedditSearchResultItem],
+    event_queue: queue.Queue[dict[str, Any] | None],
+    stop_event: threading.Event,
+    success_budget: dict[str, int],
+    success_lock: threading.Lock,
+) -> None:
+    env_payload = {
+        "environmentId": profile.env_id,
+        "environmentIndex": environment_index,
+        "userId": profile.user_id,
+        "totalPosts": len(items),
+    }
+    counts = {"processed": 0, "success": 0, "skipped": 0, "failed": 0}
+    event_queue.put({"type": "environment_started", **env_payload})
+
+    try:
+        with DetailEnvironmentRunner(profile) as runner:
+            for item in items:
+                if stop_event.is_set():
+                    result = _make_result(item, "skipped", "任务已停止或已达到最大建议数", profile.env_id)
+                    event_queue.put({"type": "post_result", "environmentId": profile.env_id, "result": result})
+                    counts["processed"] += 1
+                    counts["skipped"] += 1
+                    continue
+
+                event_queue.put(
+                    {
+                        "type": "post_started",
+                        "environmentId": profile.env_id,
+                        "postUrl": item.postUrl,
+                        "title": item.title,
+                    }
+                )
+                detail = runner.collect_detail(item)
+                if detail.get("status") != "success":
+                    result = _make_result(item, "failed", str(detail.get("reason") or "详情抓取失败"), profile.env_id)
+                    event_queue.put({"type": "post_result", "environmentId": profile.env_id, "result": result})
+                    counts["processed"] += 1
+                    counts["failed"] += 1
+                    continue
+
+                event_queue.put(
+                    {
+                        "type": "detail_collected",
+                        "environmentId": profile.env_id,
+                        "postUrl": item.postUrl,
+                        "title": detail.get("title") or item.title,
+                        "subreddit": detail.get("subreddit") or item.subreddit,
+                        "commentCount": detail.get("included_comment_count") or 0,
+                        "mediaCount": len(detail.get("media_urls") or []),
+                    }
+                )
+                event_queue.put({"type": "gemini_started", "environmentId": profile.env_id, "postUrl": item.postUrl})
+
+                try:
+                    decision = generate_comment_decision(
+                        product_context=payload.productContext,
+                        search_result=item,
+                        detail=detail,
+                    )
+                    result = _make_result(
+                        item,
+                        decision["status"],
+                        decision.get("reason") or "",
+                        profile.env_id,
+                        title=detail.get("title") or item.title,
+                        subreddit=detail.get("subreddit") or item.subreddit,
+                        comment_url=decision.get("commentUrl"),
+                        comment_text=decision.get("commentText"),
+                    )
+                    result = _apply_success_budget(result, payload.maxSuggestions, success_budget, success_lock, stop_event)
+                except Exception as exc:
+                    result = _make_result(item, "failed", f"Gemini 评论决策失败: {exc}", profile.env_id)
+
+                event_queue.put({"type": "post_result", "environmentId": profile.env_id, "result": result})
+                counts["processed"] += 1
+                if result["status"] == "success":
+                    counts["success"] += 1
+                elif result["status"] == "skipped":
+                    counts["skipped"] += 1
+                else:
+                    counts["failed"] += 1
+    except Exception as exc:
+        for item in items[counts["processed"] :]:
+            result = _make_result(item, "failed", f"环境启动或执行失败: {exc}", profile.env_id)
+            event_queue.put({"type": "post_result", "environmentId": profile.env_id, "result": result})
+            counts["processed"] += 1
+            counts["failed"] += 1
+    finally:
+        event_queue.put({"type": "environment_finished", **env_payload, **counts})
+        event_queue.put(None)
+
+
+def load_adspower_profiles() -> list[AdsPowerProfile]:
+    api_url = os.getenv("ADSPOWER_API_URL", "").strip()
+    api_key = os.getenv("ADSPOWER_API_KEY", "").strip()
+    raw_user_ids = os.getenv("ADSPOWER_USER_IDS", "").strip()
+    fallback_user_id = os.getenv("ADSPOWER_USER_ID", "").strip()
+    target_url = os.getenv("REDDIT_TARGET_URL", "https://www.reddit.com").strip() or "https://www.reddit.com"
+    user_ids = [item.strip() for item in raw_user_ids.split(",") if item.strip()] or ([fallback_user_id] if fallback_user_id else [])
+    missing = [
+        name
+        for name, value in {
+            "ADSPOWER_API_URL": api_url,
+            "ADSPOWER_API_KEY": api_key,
+            "ADSPOWER_USER_IDS 或 ADSPOWER_USER_ID": ",".join(user_ids),
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"缺少 AdsPower 配置: {', '.join(missing)}")
+    return [
+        AdsPowerProfile(
+            env_id=f"env-{index}",
+            api_url=api_url.rstrip("/"),
+            api_key=api_key,
+            user_id=user_id,
+            target_url=target_url,
+        )
+        for index, user_id in enumerate(user_ids, start=1)
+    ]
+
+
+def _load_detail_concurrency() -> int:
+    raw_value = os.getenv("DETAIL_ENV_CONCURRENCY", "").strip()
+    if not raw_value:
+        return DEFAULT_DETAIL_ENV_CONCURRENCY
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return DEFAULT_DETAIL_ENV_CONCURRENCY
+
+
+def _dedupe_search_results(items: list[RedditSearchResultItem]) -> list[RedditSearchResultItem]:
+    seen: set[str] = set()
+    output: list[RedditSearchResultItem] = []
+    for item in items:
+        normalized_url = normalize_post_url(item.postUrl)
+        if not normalized_url or normalized_url in seen:
+            continue
+        seen.add(normalized_url)
+        item.postUrl = normalized_url
+        output.append(item)
+    return output
+
+
+def _chunk_evenly(items: list[RedditSearchResultItem], fanout: int) -> list[list[RedditSearchResultItem]]:
+    if fanout <= 1:
+        return [items]
+    base = len(items) // fanout
+    remainder = len(items) % fanout
+    chunks: list[list[RedditSearchResultItem]] = []
+    cursor = 0
+    for index in range(fanout):
+        size = base + (1 if index < remainder else 0)
+        chunk = items[cursor : cursor + size]
+        if chunk:
+            chunks.append(chunk)
+        cursor += size
+    return chunks
+
+
+def _make_result(
+    item: RedditSearchResultItem,
+    status: str,
+    reason: str,
+    environment_id: str,
+    *,
+    title: str | None = None,
+    subreddit: str | None = None,
+    comment_url: str | None = None,
+    comment_text: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "postUrl": item.postUrl,
+        "sourceQuery": item.query,
+        "subreddit": subreddit or item.subreddit,
+        "title": title or item.title,
+        "status": status,
+        "reason": reason or None,
+        "commentUrl": comment_url,
+        "commentText": comment_text,
+        "environmentId": environment_id,
+    }
+
+
+def _apply_success_budget(
+    result: dict[str, Any],
+    max_suggestions: int | None,
+    success_budget: dict[str, int],
+    success_lock: threading.Lock,
+    stop_event: threading.Event,
+) -> dict[str, Any]:
+    if result.get("status") != "success" or not max_suggestions:
+        return result
+    with success_lock:
+        if success_budget["count"] >= max_suggestions:
+            return {
+                **result,
+                "status": "skipped",
+                "reason": "已达到最大建议数",
+                "commentUrl": None,
+                "commentText": None,
+            }
+        success_budget["count"] += 1
+        if success_budget["count"] >= max_suggestions:
+            stop_event.set()
+    return result
+
+
+def encode_ndjson(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False) + "\n"

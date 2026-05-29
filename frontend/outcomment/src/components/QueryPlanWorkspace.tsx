@@ -16,6 +16,7 @@ import type {
   SuggestedTimeRange,
 } from '../types'
 import { CheckIcon, DownloadIcon, PlayIcon, PlusIcon, SparkIcon, StopIcon, TrashIcon } from './icons'
+import { CommentDecisionPanel } from './CommentDecisionPanel'
 
 const DEFAULT_CONTEXT: ProductContext = {
   productName: '',
@@ -519,6 +520,14 @@ export function QueryPlanWorkspace() {
               </div>
             )}
           </section>
+        )}
+
+        {approvedPlan && searchResults.length > 0 && (
+          <CommentDecisionPanel
+            approvedPlan={approvedPlan}
+            key={searchResults.map((item) => item.postUrl).join('|')}
+            searchResults={searchResults}
+          />
         )}
 
         {queries.length === 0 ? (

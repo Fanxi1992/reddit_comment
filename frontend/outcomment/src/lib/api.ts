@@ -2,6 +2,8 @@ import type {
   ProductContext,
   QueryPlanGenerateResponse,
   PostInput,
+  CommentDecisionRequestPayload,
+  CommentDecisionStreamEvent,
   RedditSearchRequestPayload,
   RedditSearchStreamEvent,
   StreamEvent,
@@ -121,6 +123,33 @@ export async function streamRedditSearch({
 
   if (!response.body) {
     throw new Error('浏览器不支持流式响应')
+  }
+
+  await readNdjsonStream(response, onEvent)
+}
+
+export async function streamCommentDecisions({
+  payload,
+  signal,
+  onEvent,
+}: {
+  payload: CommentDecisionRequestPayload
+  signal?: AbortSignal
+  onEvent: (event: CommentDecisionStreamEvent) => void
+}): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/comment-decisions/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+    },
+    body: JSON.stringify(payload),
+    signal,
+  })
+
+  if (!response.ok) {
+    const errorText = await readErrorMessage(response)
+    throw new Error(errorText || `请求失败：${response.status}`)
   }
 
   await readNdjsonStream(response, onEvent)

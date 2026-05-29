@@ -207,3 +207,115 @@ export type QuerySearchState = {
   rawResultCount: number
   uniqueResultCount: number
 }
+
+export type CommentDecisionStatus = 'pending' | 'detail' | 'gemini' | 'success' | 'skipped' | 'failed'
+export type DecisionEnvironmentStatus = 'starting' | 'running' | 'completed' | 'failed'
+
+export type CommentDecisionRequestPayload = {
+  productContext: ProductContext
+  queries: PlannedQuery[]
+  searchResults: RedditSearchResultItem[]
+  maxSuggestions?: number
+}
+
+export type CommentDecisionResult = {
+  postUrl: string
+  sourceQuery: string
+  subreddit?: string | null
+  title?: string | null
+  status: 'success' | 'skipped' | 'failed'
+  reason?: string | null
+  commentUrl?: string | null
+  commentText?: string | null
+  environmentId?: string | null
+}
+
+export type CommentDecisionSummary = {
+  totalPosts: number
+  processedPosts: number
+  successCount: number
+  skippedCount: number
+  failedCount: number
+}
+
+export type DecisionPostState = {
+  status: CommentDecisionStatus
+  title: string
+  subreddit: string
+  sourceQuery: string
+  reason?: string | null
+  environmentId?: string | null
+  commentUrl?: string | null
+  commentText?: string | null
+}
+
+export type DecisionEnvironmentState = {
+  status: DecisionEnvironmentStatus
+  environmentIndex: number
+  userId: string
+  totalPosts: number
+  processed: number
+  success: number
+  skipped: number
+  failed: number
+}
+
+export type CommentDecisionStreamEvent =
+  | {
+      type: 'decision_started'
+      totalPosts: number
+      environmentCount: number
+      maxSuggestions?: number | null
+    }
+  | {
+      type: 'environment_started'
+      environmentId: string
+      environmentIndex: number
+      userId: string
+      totalPosts: number
+    }
+  | {
+      type: 'post_started'
+      environmentId: string
+      postUrl: string
+      title: string
+    }
+  | {
+      type: 'detail_collected'
+      environmentId: string
+      postUrl: string
+      title: string
+      subreddit: string
+      commentCount: number
+      mediaCount: number
+    }
+  | {
+      type: 'gemini_started'
+      environmentId: string
+      postUrl: string
+    }
+  | {
+      type: 'post_result'
+      environmentId: string
+      result: CommentDecisionResult
+    }
+  | {
+      type: 'environment_finished'
+      environmentId: string
+      environmentIndex: number
+      userId: string
+      totalPosts: number
+      processed: number
+      success: number
+      skipped: number
+      failed: number
+    }
+  | {
+      type: 'done'
+      summary: CommentDecisionSummary
+      results: CommentDecisionResult[]
+    }
+  | {
+      type: 'error'
+      message: string
+    }

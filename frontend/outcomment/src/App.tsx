@@ -15,6 +15,7 @@ import type { AnalysisResult, PostInput, ResultItem, StreamEvent, StreamSummary,
 import { DownloadIcon } from './components/icons'
 
 const MAX_BATCH_POSTS = 50
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
 type BackendStatus = 'checking' | 'online' | 'offline'
 type InputTab = 'manual' | 'excel'
@@ -42,7 +43,7 @@ export default function App() {
   useEffect(() => {
     let isMounted = true
 
-    fetch('/api/health')
+    fetch(`${API_BASE_URL}/api/health`)
       .then((response) => {
         if (isMounted) {
           setBackendStatus(response.ok ? 'online' : 'offline')

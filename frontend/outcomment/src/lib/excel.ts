@@ -1,6 +1,13 @@
 import * as XLSX from 'xlsx'
 
-import type { ImportReport, PostInput, ProductContext, RedditSearchResultItem, ResultItem } from '../types'
+import type {
+  CommentDecisionResult,
+  ImportReport,
+  PostInput,
+  ProductContext,
+  RedditSearchResultItem,
+  ResultItem,
+} from '../types'
 import { createPostInput, validatePosts } from './validation'
 
 const SHEET_NAME = 'Reddit帖子导入模板'
@@ -123,6 +130,33 @@ export function downloadRedditSearchResultsCsv(
   URL.revokeObjectURL(url)
 }
 
+export function downloadCommentDecisionsXlsx(results: CommentDecisionResult[]): void {
+  const worksheet = XLSX.utils.json_to_sheet(buildCommentDecisionRows(results), {
+    header: ['commentUrl', 'commentText'],
+  })
+  worksheet['!cols'] = [{ wch: 96 }, { wch: 120 }]
+
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Comment Decisions')
+  XLSX.writeFile(workbook, `reddit-comment-decisions-${formatDateForFileName(new Date())}.xlsx`)
+}
+
+export function downloadCommentDecisionsCsv(results: CommentDecisionResult[]): void {
+  const worksheet = XLSX.utils.json_to_sheet(buildCommentDecisionRows(results), {
+    header: ['commentUrl', 'commentText'],
+  })
+  const csv = XLSX.utils.sheet_to_csv(worksheet)
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `reddit-comment-decisions-${formatDateForFileName(new Date())}.csv`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
 function buildSearchResultRows(productContext: ProductContext, results: RedditSearchResultItem[]) {
   return results.map((result) => ({
     产品名称: productContext.productName,
@@ -141,6 +175,15 @@ function buildSearchResultRows(productContext: ProductContext, results: RedditSe
     Votes: result.votes ?? '',
     Comments: result.comments ?? '',
   }))
+}
+
+function buildCommentDecisionRows(results: CommentDecisionResult[]) {
+  return results
+    .filter((result) => result.status === 'success' && result.commentUrl && result.commentText)
+    .map((result) => ({
+      commentUrl: result.commentUrl,
+      commentText: result.commentText,
+    }))
 }
 
 function formatDateForFileName(date: Date): string {
