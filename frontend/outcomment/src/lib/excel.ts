@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx'
 
-import type { ImportReport, PostInput, ResultItem } from '../types'
+import type { ImportReport, PostInput, ProductContext, RedditSearchResultItem, ResultItem } from '../types'
 import { createPostInput, validatePosts } from './validation'
 
 const SHEET_NAME = 'Reddit帖子导入模板'
@@ -78,6 +78,69 @@ export function downloadAnalysisResults(results: ResultItem[]): void {
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, worksheet, '分析结果')
   XLSX.writeFile(workbook, `reddit-analysis-results-${formatDateForFileName(new Date())}.xlsx`)
+}
+
+export function downloadRedditSearchResultsXlsx(
+  productContext: ProductContext,
+  results: RedditSearchResultItem[],
+): void {
+  const rows = buildSearchResultRows(productContext, results)
+  const worksheet = XLSX.utils.json_to_sheet(rows)
+  worksheet['!cols'] = [
+    { wch: 28 },
+    { wch: 72 },
+    { wch: 18 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 18 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 72 },
+    { wch: 60 },
+    { wch: 24 },
+  ]
+
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Reddit URL 汇总')
+  XLSX.writeFile(workbook, `reddit-search-urls-${formatDateForFileName(new Date())}.xlsx`)
+}
+
+export function downloadRedditSearchResultsCsv(
+  productContext: ProductContext,
+  results: RedditSearchResultItem[],
+): void {
+  const worksheet = XLSX.utils.json_to_sheet(buildSearchResultRows(productContext, results))
+  const csv = XLSX.utils.sheet_to_csv(worksheet)
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `reddit-search-urls-${formatDateForFileName(new Date())}.csv`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+function buildSearchResultRows(productContext: ProductContext, results: RedditSearchResultItem[]) {
+  return results.map((result) => ({
+    产品名称: productContext.productName,
+    产品情况: productContext.productDescription,
+    来源Query: result.query,
+    匹配Queries: result.matchedQueries.join(' | '),
+    意图: result.queryIntent,
+    优先级: `P${result.priority}`,
+    时间范围: result.timeRange,
+    结果序号: result.resultIndex,
+    Subreddit: result.subreddit,
+    帖子标题: result.title,
+    帖子链接: result.postUrl,
+    PostID: result.postId,
+    发布时间: result.ageText,
+    Votes: result.votes ?? '',
+    Comments: result.comments ?? '',
+  }))
 }
 
 function formatDateForFileName(date: Date): string {

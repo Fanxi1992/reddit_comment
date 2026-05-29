@@ -1,4 +1,11 @@
-import type { PostInput, StreamEvent } from '../types'
+import type {
+  ProductContext,
+  QueryPlanGenerateResponse,
+  PostInput,
+  RedditSearchRequestPayload,
+  RedditSearchStreamEvent,
+  StreamEvent,
+} from '../types'
 import { toPostPayload } from './validation'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
@@ -64,6 +71,92 @@ export async function streamAnalysis({
   buffer += decoder.decode()
   if (buffer.trim()) {
     onEvent(JSON.parse(buffer.trim()) as StreamEvent)
+  }
+}
+
+export async function generateQueryPlan(payload: ProductContext): Promise<QueryPlanGenerateResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/query-plan/generate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const errorText = await readErrorMessage(response)
+    throw new Error(errorText || `请求失败：${response.status}`)
+  }
+
+  return (await response.json()) as QueryPlanGenerateResponse
+}
+
+export async function streamRedditSearch({
+  payload,
+  signal,
+  onEvent,
+}: {
+  payload: RedditSearchRequestPayload
+  signal?: AbortSignal
+  onEvent: (event: RedditSearchStreamEvent) => void
+}): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/reddit-search/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+    },
+    body: JSON.stringify({
+      ...payload,
+      perQueryLimit: payload.perQueryLimit ?? 20,
+      searchSort: payload.searchSort ?? 'relevance',
+    }),
+    signal,
+  })
+
+  if (!response.ok) {
+    const errorText = await readErrorMessage(response)
+    throw new Error(errorText || `请求失败：${response.status}`)
+  }
+
+  if (!response.body) {
+    throw new Error('浏览器不支持流式响应')
+  }
+
+  await readNdjsonStream(response, onEvent)
+}
+
+async function readNdjsonStream<T>(response: Response, onEvent: (event: T) => void): Promise<void> {
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw new Error('浏览器不支持流式响应')
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) {
+      break
+    }
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    for (const line of lines) {
+      const trimmedLine = line.trim()
+      if (!trimmedLine) {
+        continue
+      }
+      onEvent(JSON.parse(trimmedLine) as T)
+    }
+  }
+
+  buffer += decoder.decode()
+  if (buffer.trim()) {
+    onEvent(JSON.parse(buffer.trim()) as T)
   }
 }
 

@@ -1,14 +1,24 @@
 import threading
+import asyncio
+from collections.abc import Iterator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from app.query_planner import generate_query_plan
 from app.reddit_analyzer import MAX_POSTS_PER_BATCH, stream_reddit_analysis
-from app.schemas import AnalyzeRequest
+from app.reddit_searcher import encode_ndjson, run_reddit_search_batch
+from app.schemas import (
+    AnalyzeRequest,
+    QueryPlanGenerateRequest,
+    QueryPlanGenerateResponse,
+    RedditSearchRequest,
+)
 
 
 MAX_CONCURRENT_ANALYSES = 3
+MAX_CONCURRENT_REDDIT_SEARCHES = 1
 
 
 class AnalysisTaskLimiter:
@@ -30,6 +40,7 @@ class AnalysisTaskLimiter:
 
 
 task_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_ANALYSES)
+reddit_search_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_REDDIT_SEARCHES)
 
 
 app = FastAPI(title="Reddit Insight Analyzer API")
@@ -46,6 +57,53 @@ app.add_middleware(
 @app.get("/api/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/query-plan/generate", response_model=QueryPlanGenerateResponse)
+def generate_reddit_query_plan(payload: QueryPlanGenerateRequest) -> QueryPlanGenerateResponse:
+    try:
+        return generate_query_plan(payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Query 规划生成失败: {exc}") from exc
+
+
+@app.post("/api/reddit-search/stream")
+async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -> StreamingResponse:
+    if not reddit_search_limiter.try_acquire():
+        raise HTTPException(status_code=429, detail="当前已有 Reddit 搜索任务正在运行，请稍后再试")
+
+    async def stream_with_release():
+        try:
+            yield encode_ndjson(
+                {
+                    "type": "search_started",
+                    "totalQueries": len(payload.queries),
+                    "perQueryLimit": payload.perQueryLimit,
+                    "searchSort": payload.searchSort,
+                }
+            )
+            iterator = run_reddit_search_batch(payload)
+            while True:
+                if await request.is_disconnected():
+                    yield encode_ndjson({"type": "error", "message": "客户端已断开连接，搜索任务停止"})
+                    return
+
+                event = await asyncio.to_thread(_next_stream_event, iterator)
+                if event is None:
+                    return
+                yield encode_ndjson(event)
+        except Exception as exc:
+            yield encode_ndjson({"type": "error", "message": f"Reddit 搜索失败: {exc}"})
+        finally:
+            reddit_search_limiter.release()
+
+    return StreamingResponse(
+        stream_with_release(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/analyze/stream")
@@ -119,3 +177,10 @@ def _normalize_url(url: str) -> str:
     if normalized.endswith("/"):
         normalized = normalized[:-1]
     return normalized.lower()
+
+
+def _next_stream_event(iterator: Iterator[dict]) -> dict | None:
+    try:
+        return next(iterator)
+    except StopIteration:
+        return None
