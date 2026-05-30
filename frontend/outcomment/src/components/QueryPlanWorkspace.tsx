@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 
 import { generateQueryPlan, streamRedditSearch } from '../lib/api'
 import { downloadRedditSearchResultsCsv, downloadRedditSearchResultsXlsx } from '../lib/excel'
+import { normalizeUrl } from '../lib/validation'
 import type {
   ApprovedQueryPlan,
   PlannedQuery,
@@ -54,7 +55,10 @@ const EMPTY_QUERY: PlannedQueryPayload = {
   suggestedTimeRange: 'week',
 }
 
+type UrlSourceMode = 'search' | 'manual'
+
 export function QueryPlanWorkspace() {
+  const [urlSourceMode, setUrlSourceMode] = useState<UrlSourceMode>('search')
   const [context, setContext] = useState<ProductContext>(DEFAULT_CONTEXT)
   const [queries, setQueries] = useState<PlannedQuery[]>([])
   const [approvedPlan, setApprovedPlan] = useState<ApprovedQueryPlan | null>(null)
@@ -65,6 +69,8 @@ export function QueryPlanWorkspace() {
   const [searchSummary, setSearchSummary] = useState<RedditSearchSummary | null>(null)
   const [isSearching, setIsSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [manualUrlsText, setManualUrlsText] = useState('')
+  const [manualUrlError, setManualUrlError] = useState<string | null>(null)
   const searchAbortRef = useRef<AbortController | null>(null)
 
   const validQueryCount = useMemo(
@@ -74,6 +80,7 @@ export function QueryPlanWorkspace() {
   const canGenerate = context.productName.trim() && context.productDescription.trim() && !isGenerating
   const canApprove = validQueryCount > 0 && !isGenerating
   const canStartSearch = Boolean(approvedPlan?.queries.length) && !isGenerating && !isSearching
+  const manualUrlPreview = useMemo(() => parseManualRedditUrls(manualUrlsText), [manualUrlsText])
 
   const resetSearchState = () => {
     searchAbortRef.current?.abort()
@@ -89,6 +96,15 @@ export function QueryPlanWorkspace() {
     setContext((current) => ({ ...current, [key]: value }))
     setError(null)
     setApprovedPlan(null)
+    setManualUrlError(null)
+    resetSearchState()
+  }
+
+  const changeUrlSourceMode = (mode: UrlSourceMode) => {
+    setUrlSourceMode(mode)
+    setApprovedPlan(null)
+    setError(null)
+    setManualUrlError(null)
     resetSearchState()
   }
 
@@ -205,6 +221,43 @@ export function QueryPlanWorkspace() {
     setIsSearching(false)
   }
 
+  const prepareManualUrls = () => {
+    if (!context.productName.trim() || !context.productDescription.trim()) {
+      setManualUrlError('产品名称和产品情况是必填项。')
+      return
+    }
+    if (!manualUrlPreview.valid.length) {
+      setManualUrlError('请粘贴至少一个有效的 Reddit 帖子 URL。')
+      return
+    }
+
+    const manualQuery = createPlannedQuery({
+      query: 'manual_url_upload',
+      intent: 'other',
+      reason: 'Manual Reddit URL upload',
+      priority: 1,
+      suggestedTimeRange: 'all',
+    })
+    const manualResults = manualUrlPreview.valid.map((url, index) => buildManualSearchResult(url, index + 1))
+    setApprovedPlan({
+      productContext: { ...context, desiredQueryCount: 1 },
+      queries: [manualQuery],
+      approvedAt: new Date().toISOString(),
+    })
+    setSearchResults(manualResults)
+    setSearchSummary({
+      totalQueries: 1,
+      successfulQueries: 1,
+      failedQueries: 0,
+      rawUrlCount: manualUrlPreview.rawCount,
+      uniqueUrlCount: manualResults.length,
+    })
+    setQuerySearchStates({})
+    setManualUrlError(null)
+    setSearchError(null)
+    setError(null)
+  }
+
   const applySearchEvent = (event: RedditSearchStreamEvent, plan: ApprovedQueryPlan) => {
     if (event.type === 'query_started') {
       const query = plan.queries[event.queryIndex - 1]
@@ -251,7 +304,7 @@ export function QueryPlanWorkspace() {
       <aside className="min-w-0 space-y-3 rounded-md border border-slate-200 bg-white p-3.5 shadow-sm lg:sticky lg:top-4 lg:max-h-[calc(100vh-32px)] lg:overflow-y-auto">
         <div>
           <h2 className="text-base font-semibold text-slate-950">产品上下文</h2>
-          <p className="mt-1 text-sm text-slate-500">用于裂解 Reddit 搜索短语，本轮不会触发 RPA。</p>
+          <p className="mt-1 text-sm text-slate-500">用于搜索裂解和评论生成提示词。</p>
         </div>
 
         <Field label="产品名称" required>
@@ -317,38 +370,72 @@ export function QueryPlanWorkspace() {
           />
         </Field>
 
-        <Field label="期望 Query 数量">
-          <input
-            className={inputClassName}
-            max={6}
-            min={1}
-            onChange={(event) =>
-              updateContext('desiredQueryCount', clampQueryCount(Number(event.target.value) || 6))
-            }
-            type="number"
-            value={context.desiredQueryCount}
-          />
-        </Field>
+        {urlSourceMode === 'search' && (
+          <>
+            <Field label="期望 Query 数量">
+              <input
+                className={inputClassName}
+                max={6}
+                min={1}
+                onChange={(event) =>
+                  updateContext('desiredQueryCount', clampQueryCount(Number(event.target.value) || 6))
+                }
+                type="number"
+                value={context.desiredQueryCount}
+              />
+            </Field>
 
-        <button
-          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-teal-600 px-4 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-          disabled={!canGenerate}
-          onClick={() => void handleGenerate()}
-          type="button"
-        >
-          <SparkIcon />
-          {isGenerating ? '生成中...' : '生成搜索 Query'}
-        </button>
+            <button
+              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-teal-600 px-4 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              disabled={!canGenerate}
+              onClick={() => void handleGenerate()}
+              type="button"
+            >
+              <SparkIcon />
+              {isGenerating ? '生成中...' : '生成搜索 Query'}
+            </button>
+          </>
+        )}
       </aside>
 
       <section className="min-w-0 space-y-4">
         <div className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-slate-950">Query 审核列表</h2>
-              <p className="mt-1 text-sm text-slate-500">生成后可人工编辑、删除、补充和批准。</p>
+              <h2 className="text-base font-semibold text-slate-950">URL 来源</h2>
+              <p className="mt-1 text-sm text-slate-500">选择通过 AI 搜索裂解获取 URL，或直接粘贴已准备好的 Reddit 帖子 URL。</p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid grid-cols-2 rounded-md bg-slate-100 p-0.5">
+              <button
+                className={`h-9 rounded-md px-3 text-sm font-semibold transition ${
+                  urlSourceMode === 'search' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+                }`}
+                onClick={() => changeUrlSourceMode('search')}
+                type="button"
+              >
+                AI 裂解搜索
+              </button>
+              <button
+                className={`h-9 rounded-md px-3 text-sm font-semibold transition ${
+                  urlSourceMode === 'manual' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+                }`}
+                onClick={() => changeUrlSourceMode('manual')}
+                type="button"
+              >
+                手动导入 URL
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {urlSourceMode === 'search' ? (
+          <div className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">Query 审核列表</h2>
+                <p className="mt-1 text-sm text-slate-500">生成后可人工编辑、删除、补充和批准。</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
                 有效 {validQueryCount} / 全部 {queries.length}
               </span>
@@ -370,22 +457,86 @@ export function QueryPlanWorkspace() {
                 批准 Query 列表
               </button>
             </div>
+            </div>
+
+            {error && (
+              <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+                {error}
+              </div>
+            )}
+
+            {approvedPlan && (
+              <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+                已批准 {approvedPlan.queries.length} 条 Query。可以执行 Reddit 搜索并汇总去重帖子 URL。
+              </div>
+            )}
           </div>
-
-          {error && (
-            <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
-              {error}
+        ) : (
+          <section className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">手动导入 Reddit URL</h2>
+                <p className="mt-1 text-sm text-slate-500">一行一个 Reddit 帖子 URL，系统会校验、去重，然后直接进入评论决策。</p>
+              </div>
+              <button
+                className="inline-flex h-9 items-center gap-1 rounded-md bg-teal-600 px-3 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                disabled={!manualUrlPreview.valid.length}
+                onClick={prepareManualUrls}
+                type="button"
+              >
+                <CheckIcon />
+                准备评论决策
+              </button>
             </div>
-          )}
 
-          {approvedPlan && (
-            <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
-              已批准 {approvedPlan.queries.length} 条 Query。可以执行 Reddit 搜索并汇总去重帖子 URL。
+            <textarea
+              className={`${inputClassName} mt-3 min-h-56 resize-y font-mono leading-6`}
+              onChange={(event) => {
+                setManualUrlsText(event.target.value)
+                setManualUrlError(null)
+                setApprovedPlan(null)
+                setSearchResults([])
+                setSearchSummary(null)
+              }}
+              placeholder={`https://www.reddit.com/r/example/comments/...\nhttps://www.reddit.com/r/example/comments/...`}
+              value={manualUrlsText}
+            />
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              <Metric label="输入行数" value={manualUrlPreview.rawCount} />
+              <Metric label="有效去重 URL" value={manualUrlPreview.valid.length} />
+              <Metric label="无效/重复" value={manualUrlPreview.invalid.length + manualUrlPreview.duplicateCount} />
             </div>
-          )}
-        </div>
 
-        {approvedPlan && (
+            {manualUrlError && (
+              <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+                {manualUrlError}
+              </div>
+            )}
+
+            {manualUrlPreview.invalid.length > 0 && (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <div className="font-semibold">以下 URL 会被忽略：</div>
+                <div className="mt-1 max-h-28 overflow-y-auto font-mono text-xs">
+                  {manualUrlPreview.invalid.slice(0, 12).map((url) => (
+                    <div className="truncate" key={url} title={url}>
+                      {url}
+                    </div>
+                  ))}
+                  {manualUrlPreview.invalid.length > 12 ? <div>还有 {manualUrlPreview.invalid.length - 12} 条...</div> : null}
+                </div>
+              </div>
+            )}
+
+            {approvedPlan && searchResults.length > 0 && (
+              <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+                已准备 {searchResults.length} 条去重 URL，可以生成评论决策。
+              </div>
+            )}
+          </section>
+        )}
+
+        {urlSourceMode === 'search' && approvedPlan && (
           <section className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -530,11 +681,13 @@ export function QueryPlanWorkspace() {
           />
         )}
 
-        {queries.length === 0 ? (
+        {urlSourceMode === 'search' && queries.length === 0 ? (
           <div className="rounded-md border border-dashed border-slate-300 bg-white px-5 py-12 text-center text-sm font-medium text-slate-500">
             请输入产品上下文并生成 Query
           </div>
-        ) : (
+        ) : null}
+
+        {urlSourceMode === 'search' && queries.length > 0 ? (
           <div className="grid min-w-0 gap-3">
             {queries.map((item, index) => (
               <article className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm" key={item.id}>
@@ -620,7 +773,7 @@ export function QueryPlanWorkspace() {
               </article>
             ))}
           </div>
-        )}
+        ) : null}
       </section>
     </div>
   )
@@ -653,6 +806,90 @@ function Metric({ label, value }: { label: string; value: number }) {
       <div className="mt-1 text-lg font-semibold text-slate-950">{value}</div>
     </div>
   )
+}
+
+function parseManualRedditUrls(rawText: string): {
+  rawCount: number
+  valid: string[]
+  invalid: string[]
+  duplicateCount: number
+} {
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const seen = new Set<string>()
+  const valid: string[] = []
+  const invalid: string[] = []
+  let duplicateCount = 0
+
+  for (const line of lines) {
+    const normalized = normalizeManualRedditPostUrl(line)
+    if (!normalized) {
+      invalid.push(line)
+      continue
+    }
+    const key = normalizeUrl(normalized)
+    if (seen.has(key)) {
+      duplicateCount += 1
+      continue
+    }
+    seen.add(key)
+    valid.push(normalized)
+  }
+
+  return {
+    rawCount: lines.length,
+    valid,
+    invalid,
+    duplicateCount,
+  }
+}
+
+function normalizeManualRedditPostUrl(value: string): string {
+  try {
+    const parsed = new URL(value.trim())
+    const host = parsed.hostname.toLowerCase()
+    if (host !== 'reddit.com' && host !== 'www.reddit.com' && !host.endsWith('.reddit.com')) {
+      return ''
+    }
+    const normalizedPath = parsed.pathname.replace(/\/+/g, '/').replace(/\/$/, '')
+    const match = normalizedPath.match(/^(\/r\/[^/]+\/comments\/[^/]+(?:\/[^/]+)?)/i)
+    if (!match) {
+      return ''
+    }
+    return `https://www.reddit.com${match[1]}`
+  } catch {
+    return ''
+  }
+}
+
+function buildManualSearchResult(postUrl: string, resultIndex: number): RedditSearchResultItem {
+  return {
+    query: 'manual_url_upload',
+    queryIntent: 'other',
+    priority: 1,
+    timeRange: 'all',
+    resultIndex,
+    postUrl,
+    postId: extractPostId(postUrl),
+    title: `Manual Reddit URL #${resultIndex}`,
+    subreddit: extractSubreddit(postUrl) || 'unknown',
+    ageText: '',
+    votes: null,
+    comments: null,
+    duplicateOfQuery: null,
+    matchedQueries: ['manual_url_upload'],
+  }
+}
+
+function extractPostId(url: string): string {
+  return url.match(/\/comments\/([^/?#]+)/i)?.[1] ?? ''
+}
+
+function extractSubreddit(url: string): string {
+  const subreddit = url.match(/\/r\/([^/]+)/i)?.[1]
+  return subreddit ? `r/${subreddit}` : ''
 }
 
 function createInitialSearchStates(queries: PlannedQuery[]): Record<string, QuerySearchState> {
