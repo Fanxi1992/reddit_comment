@@ -9,7 +9,7 @@ from google import genai
 from app.schemas import PlannedQuery, QueryPlanGenerateRequest, QueryPlanGenerateResponse
 
 
-MODEL_NAME = "gemini-3-flash-preview"
+MODEL_NAME = "gemini-3.5-flash"
 ENGLISH_QUERY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\s'&+/\-]{1,118}[A-Za-z0-9?]$")
 
 load_dotenv()

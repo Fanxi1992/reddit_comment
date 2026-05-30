@@ -12,7 +12,7 @@ from app.reddit_analyzer import download_image_bytes
 from app.schemas import QueryPlanGenerateRequest, RedditSearchResultItem
 
 
-MODEL_NAME = "gemini-3-flash-preview"
+MODEL_NAME = "gemini-3.5-flash"
 GEMINI_TIMEOUT_SECONDS = 2 * 60
 MAX_BODY_CHARS = 5000
 MAX_COMMENT_TEXT_CHARS = 900

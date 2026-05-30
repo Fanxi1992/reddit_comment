@@ -315,7 +315,7 @@ def process_single_reddit_item(
                     image_count += 1
 
         response = client.models.generate_content(
-            model="gemini-3-flash-preview",
+            model="gemini-3.5-flash",
             contents=gemini_contents,
         )
 
