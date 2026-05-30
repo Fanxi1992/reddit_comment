@@ -2,7 +2,12 @@ import { useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { generateQueryPlan, streamRedditSearch } from '../lib/api'
-import { downloadRedditSearchResultsCsv, downloadRedditSearchResultsXlsx } from '../lib/excel'
+import {
+  downloadManualUrlExcelTemplate,
+  downloadRedditSearchResultsCsv,
+  downloadRedditSearchResultsXlsx,
+  parseManualUrlExcelFile,
+} from '../lib/excel'
 import { normalizeUrl } from '../lib/validation'
 import type {
   ApprovedQueryPlan,
@@ -16,7 +21,7 @@ import type {
   RedditSearchSummary,
   SuggestedTimeRange,
 } from '../types'
-import { CheckIcon, DownloadIcon, PlayIcon, PlusIcon, SparkIcon, StopIcon, TrashIcon } from './icons'
+import { CheckIcon, DownloadIcon, PlayIcon, PlusIcon, SparkIcon, StopIcon, TrashIcon, UploadIcon } from './icons'
 import { CommentDecisionPanel } from './CommentDecisionPanel'
 
 const DEFAULT_CONTEXT: ProductContext = {
@@ -72,6 +77,7 @@ export function QueryPlanWorkspace() {
   const [manualUrlsText, setManualUrlsText] = useState('')
   const [manualUrlError, setManualUrlError] = useState<string | null>(null)
   const searchAbortRef = useRef<AbortController | null>(null)
+  const manualUrlFileInputRef = useRef<HTMLInputElement | null>(null)
 
   const validQueryCount = useMemo(
     () => queries.filter((item) => item.query.trim() && item.reason.trim()).length,
@@ -256,6 +262,31 @@ export function QueryPlanWorkspace() {
     setManualUrlError(null)
     setSearchError(null)
     setError(null)
+  }
+
+  const handleManualUrlExcelUpload = async (file: File | undefined) => {
+    if (!file) {
+      return
+    }
+
+    setManualUrlError(null)
+    try {
+      const urls = await parseManualUrlExcelFile(file)
+      if (!urls.length) {
+        setManualUrlError('Excel 里没有读取到 URL。')
+        return
+      }
+      setManualUrlsText((current) => [current.trim(), urls.join('\n')].filter(Boolean).join('\n'))
+      setApprovedPlan(null)
+      setSearchResults([])
+      setSearchSummary(null)
+    } catch (exc) {
+      setManualUrlError(exc instanceof Error ? exc.message : 'Excel 解析失败')
+    } finally {
+      if (manualUrlFileInputRef.current) {
+        manualUrlFileInputRef.current.value = ''
+      }
+    }
   }
 
   const applySearchEvent = (event: RedditSearchStreamEvent, plan: ApprovedQueryPlan) => {
@@ -478,16 +509,42 @@ export function QueryPlanWorkspace() {
                 <h2 className="text-base font-semibold text-slate-950">手动导入 Reddit URL</h2>
                 <p className="mt-1 text-sm text-slate-500">一行一个 Reddit 帖子 URL，系统会校验、去重，然后直接进入评论决策。</p>
               </div>
-              <button
-                className="inline-flex h-9 items-center gap-1 rounded-md bg-teal-600 px-3 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                disabled={!manualUrlPreview.valid.length}
-                onClick={prepareManualUrls}
-                type="button"
-              >
-                <CheckIcon />
-                准备评论决策
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-700"
+                  onClick={() => manualUrlFileInputRef.current?.click()}
+                  type="button"
+                >
+                  <UploadIcon />
+                  上传 XLSX
+                </button>
+                <button
+                  className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-700"
+                  onClick={downloadManualUrlExcelTemplate}
+                  type="button"
+                >
+                  <DownloadIcon />
+                  下载模板
+                </button>
+                <button
+                  className="inline-flex h-9 items-center gap-1 rounded-md bg-teal-600 px-3 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  disabled={!manualUrlPreview.valid.length}
+                  onClick={prepareManualUrls}
+                  type="button"
+                >
+                  <CheckIcon />
+                  准备评论决策
+                </button>
+              </div>
             </div>
+
+            <input
+              accept=".xlsx"
+              className="hidden"
+              onChange={(event) => void handleManualUrlExcelUpload(event.target.files?.[0])}
+              ref={manualUrlFileInputRef}
+              type="file"
+            />
 
             <textarea
               className={`${inputClassName} mt-3 min-h-56 resize-y font-mono leading-6`}

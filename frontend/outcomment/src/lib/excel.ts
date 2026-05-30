@@ -12,6 +12,8 @@ import { createPostInput, validatePosts } from './validation'
 
 const SHEET_NAME = 'Reddit帖子导入模板'
 const URL_HEADER = '帖子链接'
+const MANUAL_URL_SHEET_NAME = 'Reddit URL 导入模板'
+const MANUAL_URL_HEADER = 'Reddit URL'
 const RESULT_STATUS_LABELS = {
   queued: '等待',
   processing: '处理中',
@@ -66,6 +68,45 @@ export function downloadExcelTemplate(): void {
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, worksheet, SHEET_NAME)
   XLSX.writeFile(workbook, 'reddit-post-import-template.xlsx')
+}
+
+export async function parseManualUrlExcelFile(file: File): Promise<string[]> {
+  const buffer = await file.arrayBuffer()
+  const workbook = XLSX.read(buffer, { type: 'array' })
+  const sheetName = workbook.SheetNames[0]
+
+  if (!sheetName) {
+    throw new Error('Excel 文件没有可读取的工作表')
+  }
+
+  const worksheet = workbook.Sheets[sheetName]
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
+    defval: '',
+  })
+
+  if (!rows.length) {
+    return []
+  }
+
+  const headers = Object.keys(rows[0])
+  const urlHeader =
+    headers.find((header) => header.trim().toLowerCase() === MANUAL_URL_HEADER.toLowerCase()) ||
+    headers.find((header) => header.trim().toLowerCase() === URL_HEADER.toLowerCase()) ||
+    headers[0]
+
+  return rows.map((row) => String(row[urlHeader] ?? '').trim()).filter(Boolean)
+}
+
+export function downloadManualUrlExcelTemplate(): void {
+  const worksheet = XLSX.utils.aoa_to_sheet([
+    [MANUAL_URL_HEADER, '备注'],
+    ['https://www.reddit.com/r/example/comments/post_id/post_title', '一行一个 Reddit 帖子 URL'],
+  ])
+  worksheet['!cols'] = [{ wch: 84 }, { wch: 32 }]
+
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, MANUAL_URL_SHEET_NAME)
+  XLSX.writeFile(workbook, 'reddit-url-import-template.xlsx')
 }
 
 export function downloadAnalysisResults(results: ResultItem[]): void {
