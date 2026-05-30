@@ -22,7 +22,7 @@ type InputTab = 'manual' | 'excel'
 type AppMode = 'url-analysis' | 'query-plan'
 
 export default function App() {
-  const [appMode, setAppMode] = useState<AppMode>('url-analysis')
+  const [appMode] = useState<AppMode>('query-plan')
   const [posts, setPosts] = useState<PostInput[]>(() => validatePosts([createPostInput('manual')]))
   const [activeTab, setActiveTab] = useState<InputTab>('manual')
   const [prompt, setPrompt] = useState('')
@@ -177,26 +177,6 @@ export default function App() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="grid grid-cols-2 rounded-md bg-slate-100 p-0.5">
-              <button
-                className={`h-9 rounded-md px-3 text-sm font-semibold transition ${
-                  appMode === 'url-analysis' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'
-                }`}
-                onClick={() => setAppMode('url-analysis')}
-                type="button"
-              >
-                URL 分析
-              </button>
-              <button
-                className={`h-9 rounded-md px-3 text-sm font-semibold transition ${
-                  appMode === 'query-plan' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'
-                }`}
-                onClick={() => setAppMode('query-plan')}
-                type="button"
-              >
-                产品 Query 规划
-              </button>
-            </div>
             <StatusPill status={backendStatus} />
             {appMode === 'url-analysis' ? (
               <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
