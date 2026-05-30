@@ -19,6 +19,11 @@ from app.schemas import CommentDecisionRequest, RedditSearchResultItem
 
 MAX_COMMENTS_PER_POST = 30
 DEFAULT_DETAIL_ENV_CONCURRENCY = 3
+ADSPOWER_API_MIN_INTERVAL_SECONDS = 1.1
+ADSPOWER_BROWSER_START_RETRIES = 4
+
+_adspower_api_lock = threading.Lock()
+_adspower_last_api_call_at = 0.0
 
 load_dotenv()
 
@@ -137,22 +142,30 @@ class DetailEnvironmentRunner:
         url = f"{self.profile.api_url}/api/v1/browser/start"
         headers = {"Authorization": f"Bearer {self.profile.api_key}"}
         params = {"user_id": self.profile.user_id, "headless": 0}
-        try:
-            response = requests.get(url, params=params, headers=headers, timeout=30)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception:
-            return None
-        if payload.get("code") != 0:
-            return None
-        return payload.get("data", {}).get("ws", {}).get("puppeteer")
+        last_error = ""
+        for attempt in range(ADSPOWER_BROWSER_START_RETRIES):
+            try:
+                response = _rate_limited_adspower_get(url, params=params, headers=headers, timeout=30)
+                response.raise_for_status()
+                payload = response.json()
+            except Exception as exc:
+                last_error = str(exc)
+            else:
+                if payload.get("code") == 0:
+                    return payload.get("data", {}).get("ws", {}).get("puppeteer")
+                last_error = str(payload.get("msg") or "failed")
+
+            if "too many request" not in last_error.lower() or attempt >= ADSPOWER_BROWSER_START_RETRIES - 1:
+                break
+            time.sleep(1.2 * (attempt + 1))
+        raise RuntimeError(f"adspower_browser_start_failed:{last_error or 'unknown'}")
 
     def _stop_browser(self) -> bool:
         url = f"{self.profile.api_url}/api/v1/browser/stop"
         headers = {"Authorization": f"Bearer {self.profile.api_key}"}
         params = {"user_id": self.profile.user_id}
         try:
-            response = requests.get(url, params=params, headers=headers, timeout=30)
+            response = _rate_limited_adspower_get(url, params=params, headers=headers, timeout=30)
             response.raise_for_status()
             payload = response.json()
         except Exception:
@@ -320,6 +333,17 @@ def _run_environment_worker(
     finally:
         event_queue.put({"type": "environment_finished", **env_payload, **counts})
         event_queue.put(None)
+
+
+def _rate_limited_adspower_get(url: str, *, params: dict[str, Any], headers: dict[str, str], timeout: int) -> requests.Response:
+    global _adspower_last_api_call_at
+    with _adspower_api_lock:
+        elapsed = time.monotonic() - _adspower_last_api_call_at
+        if elapsed < ADSPOWER_API_MIN_INTERVAL_SECONDS:
+            time.sleep(ADSPOWER_API_MIN_INTERVAL_SECONDS - elapsed)
+        response = requests.get(url, params=params, headers=headers, timeout=timeout)
+        _adspower_last_api_call_at = time.monotonic()
+        return response
 
 
 def load_adspower_profiles() -> list[AdsPowerProfile]:
