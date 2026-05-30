@@ -1,8 +1,10 @@
 import json
 import math
 import os
+import queue
 import random
 import re
+import threading
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -27,6 +29,13 @@ SEARCH_TIME_LABELS = {
 SEARCH_TIME_BY_LABEL = {value.lower(): key for key, value in SEARCH_TIME_LABELS.items()}
 SEARCH_SORT_LABELS = {"relevance": "Relevance"}
 SEARCH_SORT_BY_LABEL = {value.lower(): key for key, value in SEARCH_SORT_LABELS.items()}
+DEFAULT_SEARCH_ENV_CONCURRENCY = 3
+DEFAULT_SEARCH_QUERIES_PER_ENV = 2
+ADSPOWER_API_MIN_INTERVAL_SECONDS = 1.1
+ADSPOWER_BROWSER_START_RETRIES = 4
+
+_adspower_api_lock = threading.Lock()
+_adspower_last_api_call_at = 0.0
 
 
 @dataclass
@@ -58,6 +67,7 @@ class AdsPowerSettings:
     api_key: str
     user_id: str
     target_url: str = "https://www.reddit.com"
+    env_id: str = "env-1"
 
 
 class HumanMouse:
@@ -160,22 +170,30 @@ class RedditSearchRunner:
         url = f"{self.settings.api_url}/api/v1/browser/start"
         headers = {"Authorization": f"Bearer {self.settings.api_key}"}
         params = {"user_id": self.settings.user_id, "headless": 0}
-        try:
-            response = requests.get(url, params=params, headers=headers, timeout=30)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception:
-            return None
-        if payload.get("code") != 0:
-            return None
-        return payload.get("data", {}).get("ws", {}).get("puppeteer")
+        last_error = ""
+        for attempt in range(ADSPOWER_BROWSER_START_RETRIES):
+            try:
+                response = _rate_limited_adspower_get(url, params=params, headers=headers, timeout=30)
+                response.raise_for_status()
+                payload = response.json()
+            except Exception as exc:
+                last_error = str(exc)
+            else:
+                if payload.get("code") == 0:
+                    return payload.get("data", {}).get("ws", {}).get("puppeteer")
+                last_error = str(payload.get("msg") or "failed")
+
+            if "too many request" not in last_error.lower() or attempt >= ADSPOWER_BROWSER_START_RETRIES - 1:
+                break
+            time.sleep(1.2 * (attempt + 1))
+        raise RuntimeError(f"adspower_browser_start_failed:{last_error or 'unknown'}")
 
     def _stop_browser(self) -> bool:
         url = f"{self.settings.api_url}/api/v1/browser/stop"
         headers = {"Authorization": f"Bearer {self.settings.api_key}"}
         params = {"user_id": self.settings.user_id}
         try:
-            response = requests.get(url, params=params, headers=headers, timeout=30)
+            response = _rate_limited_adspower_get(url, params=params, headers=headers, timeout=30)
             response.raise_for_status()
             payload = response.json()
         except Exception:
@@ -525,61 +543,86 @@ class RedditSearchRunner:
 
 
 def load_adspower_settings() -> AdsPowerSettings:
+    return load_adspower_search_profiles()[0]
+
+
+def load_adspower_search_profiles() -> list[AdsPowerSettings]:
     api_url = os.getenv("ADSPOWER_API_URL", "").strip()
     api_key = os.getenv("ADSPOWER_API_KEY", "").strip()
-    user_id = os.getenv("ADSPOWER_USER_ID", "").strip()
+    raw_user_ids = os.getenv("ADSPOWER_USER_IDS", "").strip()
+    fallback_user_id = os.getenv("ADSPOWER_USER_ID", "").strip()
     target_url = os.getenv("REDDIT_TARGET_URL", "https://www.reddit.com").strip() or "https://www.reddit.com"
+    user_ids = [item.strip() for item in raw_user_ids.split(",") if item.strip()] or ([fallback_user_id] if fallback_user_id else [])
     missing = [
         name
         for name, value in {
             "ADSPOWER_API_URL": api_url,
             "ADSPOWER_API_KEY": api_key,
-            "ADSPOWER_USER_ID": user_id,
+            "ADSPOWER_USER_IDS 或 ADSPOWER_USER_ID": ",".join(user_ids),
         }.items()
         if not value
     ]
     if missing:
         raise RuntimeError(f"缺少 AdsPower 配置: {', '.join(missing)}")
-    return AdsPowerSettings(api_url=api_url.rstrip("/"), api_key=api_key, user_id=user_id, target_url=target_url)
+    return [
+        AdsPowerSettings(
+            api_url=api_url.rstrip("/"),
+            api_key=api_key,
+            user_id=user_id,
+            target_url=target_url,
+            env_id=f"search-env-{index}",
+        )
+        for index, user_id in enumerate(user_ids, start=1)
+    ]
 
 
 def run_reddit_search_batch(payload: RedditSearchRequest):
-    settings = load_adspower_settings()
+    profiles = load_adspower_search_profiles()
     deduper = SearchResultDeduper()
     query_results: list[dict[str, Any]] = []
+    query_assignments = list(enumerate(payload.queries, start=1))
 
-    with RedditSearchRunner(settings) as runner:
-        for query_index, query in enumerate(payload.queries, start=1):
-            yield {
-                "type": "query_started",
-                "queryIndex": query_index,
-                "query": query.query,
-                "timeRange": query.suggestedTimeRange,
-            }
-            result = runner.collect_query(
-                query.query,
-                search_time=query.suggestedTimeRange,
-                target_count=payload.perQueryLimit,
-            )
-            raw_items = [
-                build_result_item(query, raw_item, duplicate_of_query=deduper.find_duplicate(raw_item.post_url))
-                for raw_item in result.results
-            ]
-            for item in raw_items:
-                deduper.add(item)
-            query_payload = {
-                "type": "query_result",
-                "queryIndex": query_index,
-                "query": query.query,
-                "status": result.status,
-                "reason": result.reason,
-                "searchResultsUrl": result.search_results_url,
-                "rawResultCount": len(result.results),
-                "uniqueResultCount": sum(1 for item in raw_items if not item.duplicateOfQuery),
-                "results": [item.model_dump() for item in raw_items],
-            }
-            query_results.append(query_payload)
-            yield query_payload
+    requested_concurrency = _load_search_env_concurrency()
+    queries_per_env = _load_search_queries_per_env()
+    needed_environment_count = (len(query_assignments) + queries_per_env - 1) // queries_per_env
+    profiles = profiles[: min(needed_environment_count, requested_concurrency, len(profiles), len(query_assignments))]
+    chunks = _chunk_evenly(query_assignments, len(profiles))
+    event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    threads: list[threading.Thread] = []
+
+    for environment_index, (settings, chunk) in enumerate(zip(profiles, chunks, strict=False), start=1):
+        thread = threading.Thread(
+            target=_run_search_environment_worker,
+            args=(settings, environment_index, chunk, payload.perQueryLimit, event_queue),
+            daemon=True,
+        )
+        threads.append(thread)
+        thread.start()
+
+    completed_workers = 0
+    pending_results: dict[int, dict[str, Any]] = {}
+    next_query_index = 1
+
+    while completed_workers < len(threads):
+        event = event_queue.get()
+        if event is None:
+            completed_workers += 1
+            continue
+        if event.get("type") == "_query_result_internal":
+            pending_results[int(event["queryIndex"])] = event
+            while next_query_index in pending_results:
+                query_event = pending_results.pop(next_query_index)
+                query_payload = _build_query_result_payload(
+                    deduper=deduper,
+                    query_index=next_query_index,
+                    query=query_event["query"],
+                    result=query_event["result"],
+                )
+                query_results.append(query_payload)
+                yield query_payload
+                next_query_index += 1
+            continue
+        yield event
 
     summary = build_summary(payload, query_results, deduper.results)
     yield {
@@ -592,6 +635,138 @@ def run_reddit_search_batch(payload: RedditSearchRequest):
         "summary": summary.model_dump(),
         "results": [item.model_dump() for item in deduper.sorted_results()],
     }
+
+
+def _run_search_environment_worker(
+    settings: AdsPowerSettings,
+    environment_index: int,
+    assignments: list[tuple[int, PlannedQuery]],
+    target_count: int,
+    event_queue: queue.Queue[dict[str, Any] | None],
+) -> None:
+    processed_count = 0
+    try:
+        with RedditSearchRunner(settings) as runner:
+            for query_index, query in assignments:
+                event_queue.put(
+                    {
+                        "type": "query_started",
+                        "queryIndex": query_index,
+                        "query": query.query,
+                        "timeRange": query.suggestedTimeRange,
+                        "environmentId": settings.env_id,
+                        "environmentIndex": environment_index,
+                    }
+                )
+                result = runner.collect_query(
+                    query.query,
+                    search_time=query.suggestedTimeRange,
+                    target_count=target_count,
+                )
+                event_queue.put(
+                    {
+                        "type": "_query_result_internal",
+                        "queryIndex": query_index,
+                        "query": query,
+                        "result": result,
+                    }
+                )
+                processed_count += 1
+    except Exception as exc:
+        for query_index, query in assignments[processed_count:]:
+            event_queue.put(
+                {
+                    "type": "query_started",
+                    "queryIndex": query_index,
+                    "query": query.query,
+                    "timeRange": query.suggestedTimeRange,
+                    "environmentId": settings.env_id,
+                    "environmentIndex": environment_index,
+                }
+            )
+            event_queue.put(
+                {
+                    "type": "_query_result_internal",
+                    "queryIndex": query_index,
+                    "query": query,
+                    "result": QuerySearchResult("failed", f"环境启动或执行失败: {exc}", "", [], 0),
+                }
+            )
+    finally:
+        event_queue.put(None)
+
+
+def _build_query_result_payload(
+    *,
+    deduper: "SearchResultDeduper",
+    query_index: int,
+    query: PlannedQuery,
+    result: QuerySearchResult,
+) -> dict[str, Any]:
+    raw_items = [
+        build_result_item(query, raw_item, duplicate_of_query=deduper.find_duplicate(raw_item.post_url))
+        for raw_item in result.results
+    ]
+    for item in raw_items:
+        deduper.add(item)
+    return {
+        "type": "query_result",
+        "queryIndex": query_index,
+        "query": query.query,
+        "status": result.status,
+        "reason": result.reason,
+        "searchResultsUrl": result.search_results_url,
+        "rawResultCount": len(result.results),
+        "uniqueResultCount": sum(1 for item in raw_items if not item.duplicateOfQuery),
+        "results": [item.model_dump() for item in raw_items],
+    }
+
+
+def _load_search_env_concurrency() -> int:
+    raw_value = os.getenv("SEARCH_ENV_CONCURRENCY", "").strip()
+    if not raw_value:
+        return DEFAULT_SEARCH_ENV_CONCURRENCY
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return DEFAULT_SEARCH_ENV_CONCURRENCY
+
+
+def _load_search_queries_per_env() -> int:
+    raw_value = os.getenv("SEARCH_QUERIES_PER_ENV", "").strip()
+    if not raw_value:
+        return DEFAULT_SEARCH_QUERIES_PER_ENV
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return DEFAULT_SEARCH_QUERIES_PER_ENV
+
+
+def _chunk_evenly(items: list[tuple[int, PlannedQuery]], fanout: int) -> list[list[tuple[int, PlannedQuery]]]:
+    if fanout <= 1:
+        return [items]
+    base = len(items) // fanout
+    remainder = len(items) % fanout
+    chunks: list[list[tuple[int, PlannedQuery]]] = []
+    cursor = 0
+    for index in range(fanout):
+        size = base + (1 if index < remainder else 0)
+        chunk = items[cursor : cursor + size]
+        if chunk:
+            chunks.append(chunk)
+        cursor += size
+    return chunks
+
+
+def _rate_limited_adspower_get(url: str, *, params: dict[str, Any], headers: dict[str, str], timeout: int) -> requests.Response:
+    global _adspower_last_api_call_at
+    with _adspower_api_lock:
+        elapsed = time.monotonic() - _adspower_last_api_call_at
+        if elapsed < ADSPOWER_API_MIN_INTERVAL_SECONDS:
+            time.sleep(ADSPOWER_API_MIN_INTERVAL_SECONDS - elapsed)
+        response = requests.get(url, params=params, headers=headers, timeout=timeout)
+        _adspower_last_api_call_at = time.monotonic()
+        return response
 
 
 class SearchResultDeduper:
