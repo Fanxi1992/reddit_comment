@@ -20,6 +20,7 @@ from app.schemas import CommentDecisionRequest, RedditSearchResultItem
 MAX_COMMENTS_PER_POST = 30
 DEFAULT_DETAIL_ENV_CONCURRENCY = 3
 DEFAULT_DETAIL_URLS_PER_ENV = 20
+DETAIL_CONSECUTIVE_FAILURE_LIMIT = 3
 ADSPOWER_API_MIN_INTERVAL_SECONDS = 1.1
 ADSPOWER_BROWSER_START_RETRIES = 4
 
@@ -258,11 +259,12 @@ def _run_environment_worker(
         "totalPosts": len(items),
     }
     counts = {"processed": 0, "success": 0, "skipped": 0, "failed": 0}
+    consecutive_detail_failures = 0
     event_queue.put({"type": "environment_started", **env_payload})
 
     try:
         with DetailEnvironmentRunner(profile) as runner:
-            for item in items:
+            for item_index, item in enumerate(items):
                 if stop_event.is_set():
                     result = _make_result(item, "skipped", "任务已停止或已达到最大建议数", profile.env_id)
                     event_queue.put({"type": "post_result", "environmentId": profile.env_id, "result": result})
@@ -280,11 +282,25 @@ def _run_environment_worker(
                 )
                 detail = runner.collect_detail(item)
                 if detail.get("status") != "success":
-                    result = _make_result(item, "failed", str(detail.get("reason") or "详情抓取失败"), profile.env_id)
+                    reason = str(detail.get("reason") or "详情抓取失败")
+                    result = _make_result(item, "failed", reason, profile.env_id)
                     event_queue.put({"type": "post_result", "environmentId": profile.env_id, "result": result})
                     counts["processed"] += 1
                     counts["failed"] += 1
-                    continue
+                    consecutive_detail_failures += 1
+                    if consecutive_detail_failures >= DETAIL_CONSECUTIVE_FAILURE_LIMIT:
+                        stop_reason = f"环境连续详情抓取失败 {DETAIL_CONSECUTIVE_FAILURE_LIMIT} 次，停止该环境后续处理: {reason}"
+                        for remaining_item in items[item_index + 1 :]:
+                            remaining_result = _make_result(remaining_item, "failed", stop_reason, profile.env_id)
+                            event_queue.put(
+                                {"type": "post_result", "environmentId": profile.env_id, "result": remaining_result}
+                            )
+                            counts["processed"] += 1
+                            counts["failed"] += 1
+                        break
+                    else:
+                        continue
+                consecutive_detail_failures = 0
 
                 event_queue.put(
                     {
