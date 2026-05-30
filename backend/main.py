@@ -1,5 +1,6 @@
-import threading
 import asyncio
+import queue
+import threading
 from collections.abc import Iterator
 
 from fastapi import FastAPI, HTTPException, Request
@@ -89,13 +90,19 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
                     "searchSort": payload.searchSort,
                 }
             )
-            iterator = run_reddit_search_batch(payload)
+            event_queue: queue.Queue[dict | None] = queue.Queue()
+            producer_thread = threading.Thread(
+                target=_produce_stream_events,
+                args=(run_reddit_search_batch(payload), event_queue),
+                daemon=True,
+            )
+            producer_thread.start()
             while True:
                 if await request.is_disconnected():
                     yield encode_ndjson({"type": "error", "message": "客户端已断开连接，搜索任务停止"})
                     return
 
-                event = await asyncio.to_thread(_next_stream_event, iterator)
+                event = await asyncio.to_thread(event_queue.get)
                 if event is None:
                     return
                 yield encode_ndjson(event)
@@ -223,3 +230,13 @@ def _next_stream_event(iterator: Iterator[dict]) -> dict | None:
         return next(iterator)
     except StopIteration:
         return None
+
+
+def _produce_stream_events(iterator: Iterator[dict], event_queue: queue.Queue[dict | None]) -> None:
+    try:
+        for event in iterator:
+            event_queue.put(event)
+    except Exception as exc:
+        event_queue.put({"type": "error", "message": str(exc)})
+    finally:
+        event_queue.put(None)
