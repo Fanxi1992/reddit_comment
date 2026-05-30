@@ -26,7 +26,7 @@ const DEFAULT_CONTEXT: ProductContext = {
   competitors: '',
   commentRequirements: '',
   forbiddenTopics: '',
-  desiredQueryCount: 20,
+  desiredQueryCount: 6,
 }
 
 const INTENT_OPTIONS: Array<{ value: QueryIntent; label: string }> = [
@@ -320,10 +320,10 @@ export function QueryPlanWorkspace() {
         <Field label="期望 Query 数量">
           <input
             className={inputClassName}
-            max={50}
-            min={5}
+            max={6}
+            min={1}
             onChange={(event) =>
-              updateContext('desiredQueryCount', clampQueryCount(Number(event.target.value) || 20))
+              updateContext('desiredQueryCount', clampQueryCount(Number(event.target.value) || 6))
             }
             type="number"
             value={context.desiredQueryCount}
@@ -720,7 +720,7 @@ function createId(): string {
 }
 
 function clampQueryCount(value: number): number {
-  return Math.min(50, Math.max(5, value))
+  return Math.min(6, Math.max(1, value))
 }
 
 const inputClassName =

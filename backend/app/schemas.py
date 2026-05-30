@@ -72,7 +72,7 @@ class QueryPlanGenerateRequest(BaseModel):
     competitors: str = Field(default="", max_length=2000)
     commentRequirements: str = Field(default="", max_length=3000)
     forbiddenTopics: str = Field(default="", max_length=2000)
-    desiredQueryCount: int = Field(default=20, ge=5, le=50)
+    desiredQueryCount: int = Field(default=6, ge=1, le=6)
 
 
 class PlannedQuery(BaseModel):
@@ -89,7 +89,7 @@ class QueryPlanGenerateResponse(BaseModel):
 
 class RedditSearchRequest(BaseModel):
     productContext: QueryPlanGenerateRequest
-    queries: list[PlannedQuery] = Field(..., min_length=1, max_length=50)
+    queries: list[PlannedQuery] = Field(..., min_length=1, max_length=6)
     perQueryLimit: int = Field(default=20, ge=1, le=50)
     searchSort: SearchSort = "relevance"
 
@@ -124,7 +124,7 @@ CommentDecisionStatus = Literal["success", "skipped", "failed"]
 
 class CommentDecisionRequest(BaseModel):
     productContext: QueryPlanGenerateRequest
-    queries: list[PlannedQuery] = Field(..., min_length=1, max_length=50)
+    queries: list[PlannedQuery] = Field(..., min_length=1, max_length=6)
     searchResults: list[RedditSearchResultItem] = Field(..., min_length=1, max_length=500)
     maxSuggestions: int | None = Field(default=None, ge=1, le=200)
 
