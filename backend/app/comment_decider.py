@@ -101,7 +101,8 @@ def _build_prompt(
         ),
         "hard_rules": [
             "Return JSON only following the schema.",
-            "If the context is weak, irrelevant, risky, promotional, or too little to respond to, set shouldComment=false.",
+            "Default to finding a useful, natural Reddit-native angle when there is any reasonable connection to the product context.",
+            "Only set shouldComment=false when the post is clearly irrelevant, unsafe, spam-sensitive, or there is no meaningful context to respond to.",
             "commentUrl must exactly match one URL from allowed_comment_targets.",
             "Use the post URL for a top-level comment, or a comment URL when replying to an existing comment.",
             "Write like a real Reddit user, not an ad.",
