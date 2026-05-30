@@ -78,7 +78,7 @@ def generate_reddit_query_plan(payload: QueryPlanGenerateRequest) -> QueryPlanGe
 @app.post("/api/reddit-search/stream")
 async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -> StreamingResponse:
     if not reddit_search_limiter.try_acquire():
-        raise HTTPException(status_code=429, detail="当前已有 Reddit 搜索任务正在运行，请稍后再试")
+        raise HTTPException(status_code=429, detail="当前已有 Reddit 搜索任务正在运行，ADSpower环境数量有限，请稍等十分钟再试")
 
     async def stream_with_release():
         try:
@@ -121,7 +121,7 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
 @app.post("/api/comment-decisions/stream")
 async def stream_comment_decisions(payload: CommentDecisionRequest, request: Request) -> StreamingResponse:
     if not comment_decision_limiter.try_acquire():
-        raise HTTPException(status_code=429, detail="当前已有评论决策任务正在运行，请稍后再试")
+        raise HTTPException(status_code=429, detail="当前已有评论决策任务正在运行，ADSpower环境数量有限，请稍等十分钟再试")
 
     async def stream_with_release():
         iterator = None
@@ -174,7 +174,7 @@ async def analyze_reddit_posts(payload: AnalyzeRequest, request: Request) -> Str
     if not task_limiter.try_acquire():
         raise HTTPException(
             status_code=429,
-            detail=f"当前已有 {MAX_CONCURRENT_ANALYSES} 个分析任务正在运行，请稍后再试",
+            detail=f"当前已有 {MAX_CONCURRENT_ANALYSES} 个分析任务正在运行，ADSpower环境数量有限，请稍等十分钟再试",
         )
 
     async def should_stop() -> bool:
