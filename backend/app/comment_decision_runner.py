@@ -19,6 +19,7 @@ from app.schemas import CommentDecisionRequest, RedditSearchResultItem
 
 MAX_COMMENTS_PER_POST = 30
 DEFAULT_DETAIL_ENV_CONCURRENCY = 3
+DEFAULT_DETAIL_URLS_PER_ENV = 20
 ADSPOWER_API_MIN_INTERVAL_SECONDS = 1.1
 ADSPOWER_BROWSER_START_RETRIES = 4
 
@@ -180,7 +181,9 @@ def run_comment_decision_stream(payload: CommentDecisionRequest) -> Iterator[dic
         raise RuntimeError("没有可处理的去重 Reddit URL")
 
     requested_concurrency = _load_detail_concurrency()
-    profiles = profiles[: min(requested_concurrency, len(profiles), len(search_results))]
+    urls_per_env = _load_detail_urls_per_env()
+    needed_environment_count = (len(search_results) + urls_per_env - 1) // urls_per_env
+    profiles = profiles[: min(needed_environment_count, requested_concurrency, len(profiles), len(search_results))]
     chunks = _chunk_evenly(search_results, len(profiles))
     event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
     stop_event = threading.Event()
@@ -384,6 +387,16 @@ def _load_detail_concurrency() -> int:
         return max(1, int(raw_value))
     except ValueError:
         return DEFAULT_DETAIL_ENV_CONCURRENCY
+
+
+def _load_detail_urls_per_env() -> int:
+    raw_value = os.getenv("DETAIL_URLS_PER_ENV", "").strip()
+    if not raw_value:
+        return DEFAULT_DETAIL_URLS_PER_ENV
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return DEFAULT_DETAIL_URLS_PER_ENV
 
 
 def _dedupe_search_results(items: list[RedditSearchResultItem]) -> list[RedditSearchResultItem]:
