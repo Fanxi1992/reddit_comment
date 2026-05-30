@@ -18,6 +18,7 @@ MAX_BODY_CHARS = 5000
 MAX_COMMENT_TEXT_CHARS = 900
 MAX_COMMENTS_FOR_PROMPT = 30
 MAX_IMAGES_FOR_GEMINI = 3
+MAX_TARGET_COMMENT_PREVIEW_CHARS = 300
 
 load_dotenv()
 
@@ -223,7 +224,7 @@ def _build_allowed_targets(post_url: str, detail: dict[str, Any]) -> dict[str, s
         comment_url = _normalize_reddit_target_url(str(node.get("comment_url") or ""))
         text = re.sub(r"\s+", " ", str(node.get("text") or "")).strip()
         if comment_url and text:
-            targets[comment_url] = f"reply to {node.get('author') or 'comment'}: {text[:160]}"
+            targets[comment_url] = f"reply to {node.get('author') or 'comment'}: {text[:MAX_TARGET_COMMENT_PREVIEW_CHARS]}"
         for reply in node.get("replies") or []:
             walk(reply)
 
