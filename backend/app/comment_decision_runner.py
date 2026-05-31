@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import queue
 import random
@@ -28,6 +29,8 @@ _adspower_api_lock = threading.Lock()
 _adspower_last_api_call_at = 0.0
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,7 +71,12 @@ class DetailEnvironmentRunner:
                 self._playwright.stop()
         except Exception:
             pass
-        self._stop_browser()
+        if not self._stop_browser():
+            logger.warning(
+                "AdsPower detail environment stop failed: env_id=%s user_id=%s",
+                self.profile.env_id,
+                self.profile.user_id,
+            )
 
     def collect_detail(self, item: RedditSearchResultItem) -> dict[str, Any]:
         if self._context is None:
@@ -175,7 +183,9 @@ class DetailEnvironmentRunner:
         return payload.get("code") == 0
 
 
-def run_comment_decision_stream(payload: CommentDecisionRequest) -> Iterator[dict[str, Any]]:
+def run_comment_decision_stream(
+    payload: CommentDecisionRequest, stop_event: threading.Event | None = None
+) -> Iterator[dict[str, Any]]:
     profiles = load_adspower_profiles()
     search_results = _dedupe_search_results(payload.searchResults)
     if not search_results:
@@ -187,7 +197,7 @@ def run_comment_decision_stream(payload: CommentDecisionRequest) -> Iterator[dic
     profiles = profiles[: min(needed_environment_count, requested_concurrency, len(profiles), len(search_results))]
     chunks = _chunk_evenly(search_results, len(profiles))
     event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
-    stop_event = threading.Event()
+    stop_event = stop_event or threading.Event()
     success_budget = {"count": 0}
     success_lock = threading.Lock()
     threads: list[threading.Thread] = []
@@ -239,7 +249,7 @@ def run_comment_decision_stream(payload: CommentDecisionRequest) -> Iterator[dic
     finally:
         stop_event.set()
         for thread in threads:
-            thread.join(timeout=1)
+            thread.join()
 
 
 def _run_environment_worker(
@@ -266,11 +276,20 @@ def _run_environment_worker(
         with DetailEnvironmentRunner(profile) as runner:
             for item_index, item in enumerate(items):
                 if stop_event.is_set():
-                    result = _make_result(item, "skipped", "任务已停止或已达到最大建议数", profile.env_id)
-                    event_queue.put({"type": "post_result", "environmentId": profile.env_id, "result": result})
-                    counts["processed"] += 1
-                    counts["skipped"] += 1
-                    continue
+                    if _success_budget_reached(payload.maxSuggestions, success_budget, success_lock):
+                        for remaining_item in items[item_index:]:
+                            remaining_result = _make_result(
+                                remaining_item,
+                                "skipped",
+                                "已达到最大建议数",
+                                profile.env_id,
+                            )
+                            event_queue.put(
+                                {"type": "post_result", "environmentId": profile.env_id, "result": remaining_result}
+                            )
+                            counts["processed"] += 1
+                            counts["skipped"] += 1
+                    break
 
                 event_queue.put(
                     {
@@ -504,6 +523,17 @@ def _apply_success_budget(
         if success_budget["count"] >= max_suggestions:
             stop_event.set()
     return result
+
+
+def _success_budget_reached(
+    max_suggestions: int | None,
+    success_budget: dict[str, int],
+    success_lock: threading.Lock,
+) -> bool:
+    if not max_suggestions:
+        return False
+    with success_lock:
+        return success_budget["count"] >= max_suggestions
 
 
 def encode_ndjson(payload: dict[str, Any]) -> str:

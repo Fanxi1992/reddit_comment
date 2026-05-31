@@ -81,6 +81,8 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
         raise HTTPException(status_code=429, detail="当前已有 Reddit 搜索任务正在运行，ADSpower环境数量有限，请稍等十分钟再试")
 
     async def stream_with_release():
+        stop_event = threading.Event()
+        producer_thread = None
         try:
             yield encode_ndjson(
                 {
@@ -93,22 +95,27 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
             event_queue: queue.Queue[dict | None] = queue.Queue()
             producer_thread = threading.Thread(
                 target=_produce_stream_events,
-                args=(run_reddit_search_batch(payload), event_queue),
+                args=(run_reddit_search_batch(payload, stop_event=stop_event), event_queue),
                 daemon=True,
             )
             producer_thread.start()
             while True:
                 if await request.is_disconnected():
-                    yield encode_ndjson({"type": "error", "message": "客户端已断开连接，搜索任务停止"})
+                    stop_event.set()
                     return
 
-                event = await asyncio.to_thread(event_queue.get)
+                event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
+                if event is _QUEUE_TIMEOUT:
+                    continue
                 if event is None:
                     return
                 yield encode_ndjson(event)
         except Exception as exc:
             yield encode_ndjson({"type": "error", "message": f"Reddit 搜索失败: {exc}"})
         finally:
+            stop_event.set()
+            if producer_thread is not None and producer_thread.is_alive():
+                await _join_thread_until_done(producer_thread)
             reddit_search_limiter.release()
 
     return StreamingResponse(
@@ -124,25 +131,33 @@ async def stream_comment_decisions(payload: CommentDecisionRequest, request: Req
         raise HTTPException(status_code=429, detail="当前已有评论决策任务正在运行，ADSpower环境数量有限，请稍等十分钟再试")
 
     async def stream_with_release():
-        iterator = None
+        stop_event = threading.Event()
+        producer_thread = None
         try:
-            iterator = run_comment_decision_stream(payload)
+            event_queue: queue.Queue[dict | None] = queue.Queue()
+            producer_thread = threading.Thread(
+                target=_produce_stream_events,
+                args=(run_comment_decision_stream(payload, stop_event=stop_event), event_queue),
+                daemon=True,
+            )
+            producer_thread.start()
             while True:
                 if await request.is_disconnected():
-                    if hasattr(iterator, "close"):
-                        iterator.close()
-                    yield encode_comment_ndjson({"type": "error", "message": "客户端已断开连接，评论决策任务停止"})
+                    stop_event.set()
                     return
 
-                event = await asyncio.to_thread(_next_stream_event, iterator)
+                event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
+                if event is _QUEUE_TIMEOUT:
+                    continue
                 if event is None:
                     return
                 yield encode_comment_ndjson(event)
         except Exception as exc:
             yield encode_comment_ndjson({"type": "error", "message": f"评论决策失败: {exc}"})
         finally:
-            if iterator is not None and hasattr(iterator, "close"):
-                iterator.close()
+            stop_event.set()
+            if producer_thread is not None and producer_thread.is_alive():
+                await _join_thread_until_done(producer_thread)
             comment_decision_limiter.release()
 
     return StreamingResponse(
@@ -225,11 +240,22 @@ def _normalize_url(url: str) -> str:
     return normalized.lower()
 
 
-def _next_stream_event(iterator: Iterator[dict]) -> dict | None:
+_QUEUE_TIMEOUT = object()
+
+
+async def _join_thread_until_done(thread: threading.Thread) -> None:
+    while thread.is_alive():
+        try:
+            await asyncio.to_thread(thread.join, 0.5)
+        except asyncio.CancelledError:
+            continue
+
+
+def _get_stream_event(event_queue: queue.Queue[dict | None], timeout: float) -> dict | None | object:
     try:
-        return next(iterator)
-    except StopIteration:
-        return None
+        return event_queue.get(timeout=timeout)
+    except queue.Empty:
+        return _QUEUE_TIMEOUT
 
 
 def _produce_stream_events(iterator: Iterator[dict], event_queue: queue.Queue[dict | None]) -> None:
@@ -239,4 +265,9 @@ def _produce_stream_events(iterator: Iterator[dict], event_queue: queue.Queue[di
     except Exception as exc:
         event_queue.put({"type": "error", "message": str(exc)})
     finally:
+        if hasattr(iterator, "close"):
+            try:
+                iterator.close()
+            except Exception:
+                pass
         event_queue.put(None)

@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import os
 import queue
@@ -19,6 +20,8 @@ from app.schemas import PlannedQuery, RedditSearchRequest, RedditSearchResultIte
 
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SEARCH_URL_PREFIX = "https://www.reddit.com/search/?q="
 SEARCH_TIME_LABELS = {
@@ -135,7 +138,12 @@ class RedditSearchRunner:
                 self._playwright.stop()
         except Exception:
             pass
-        self._stop_browser()
+        if not self._stop_browser():
+            logger.warning(
+                "AdsPower search environment stop failed: env_id=%s user_id=%s",
+                self.settings.env_id,
+                self.settings.user_id,
+            )
 
     def collect_query(
         self,
@@ -576,7 +584,8 @@ def load_adspower_search_profiles() -> list[AdsPowerSettings]:
     ]
 
 
-def run_reddit_search_batch(payload: RedditSearchRequest):
+def run_reddit_search_batch(payload: RedditSearchRequest, stop_event: threading.Event | None = None):
+    stop_event = stop_event or threading.Event()
     profiles = load_adspower_search_profiles()
     deduper = SearchResultDeduper()
     query_results: list[dict[str, Any]] = []
@@ -593,7 +602,7 @@ def run_reddit_search_batch(payload: RedditSearchRequest):
     for environment_index, (settings, chunk) in enumerate(zip(profiles, chunks, strict=False), start=1):
         thread = threading.Thread(
             target=_run_search_environment_worker,
-            args=(settings, environment_index, chunk, payload.perQueryLimit, event_queue),
+            args=(settings, environment_index, chunk, payload.perQueryLimit, event_queue, stop_event),
             daemon=True,
         )
         threads.append(thread)
@@ -603,38 +612,46 @@ def run_reddit_search_batch(payload: RedditSearchRequest):
     pending_results: dict[int, dict[str, Any]] = {}
     next_query_index = 1
 
-    while completed_workers < len(threads):
-        event = event_queue.get()
-        if event is None:
-            completed_workers += 1
-            continue
-        if event.get("type") == "_query_result_internal":
-            pending_results[int(event["queryIndex"])] = event
-            while next_query_index in pending_results:
-                query_event = pending_results.pop(next_query_index)
-                query_payload = _build_query_result_payload(
-                    deduper=deduper,
-                    query_index=next_query_index,
-                    query=query_event["query"],
-                    result=query_event["result"],
-                )
-                query_results.append(query_payload)
-                yield query_payload
-                next_query_index += 1
-            continue
-        yield event
+    try:
+        while completed_workers < len(threads):
+            event = event_queue.get()
+            if event is None:
+                completed_workers += 1
+                continue
+            if event.get("type") == "_query_result_internal":
+                pending_results[int(event["queryIndex"])] = event
+                while next_query_index in pending_results:
+                    query_event = pending_results.pop(next_query_index)
+                    query_payload = _build_query_result_payload(
+                        deduper=deduper,
+                        query_index=next_query_index,
+                        query=query_event["query"],
+                        result=query_event["result"],
+                    )
+                    query_results.append(query_payload)
+                    yield query_payload
+                    next_query_index += 1
+                continue
+            yield event
 
-    summary = build_summary(payload, query_results, deduper.results)
-    yield {
-        "type": "summary",
-        "summary": summary.model_dump(),
-        "results": [item.model_dump() for item in deduper.sorted_results()],
-    }
-    yield {
-        "type": "done",
-        "summary": summary.model_dump(),
-        "results": [item.model_dump() for item in deduper.sorted_results()],
-    }
+        if stop_event.is_set():
+            return
+
+        summary = build_summary(payload, query_results, deduper.results)
+        yield {
+            "type": "summary",
+            "summary": summary.model_dump(),
+            "results": [item.model_dump() for item in deduper.sorted_results()],
+        }
+        yield {
+            "type": "done",
+            "summary": summary.model_dump(),
+            "results": [item.model_dump() for item in deduper.sorted_results()],
+        }
+    finally:
+        stop_event.set()
+        for thread in threads:
+            thread.join()
 
 
 def _run_search_environment_worker(
@@ -643,11 +660,14 @@ def _run_search_environment_worker(
     assignments: list[tuple[int, PlannedQuery]],
     target_count: int,
     event_queue: queue.Queue[dict[str, Any] | None],
+    stop_event: threading.Event,
 ) -> None:
     processed_count = 0
     try:
         with RedditSearchRunner(settings) as runner:
             for query_index, query in assignments:
+                if stop_event.is_set():
+                    break
                 event_queue.put(
                     {
                         "type": "query_started",
@@ -673,25 +693,26 @@ def _run_search_environment_worker(
                 )
                 processed_count += 1
     except Exception as exc:
-        for query_index, query in assignments[processed_count:]:
-            event_queue.put(
-                {
-                    "type": "query_started",
-                    "queryIndex": query_index,
-                    "query": query.query,
-                    "timeRange": query.suggestedTimeRange,
-                    "environmentId": settings.env_id,
-                    "environmentIndex": environment_index,
-                }
-            )
-            event_queue.put(
-                {
-                    "type": "_query_result_internal",
-                    "queryIndex": query_index,
-                    "query": query,
-                    "result": QuerySearchResult("failed", f"环境启动或执行失败: {exc}", "", [], 0),
-                }
-            )
+        if not stop_event.is_set():
+            for query_index, query in assignments[processed_count:]:
+                event_queue.put(
+                    {
+                        "type": "query_started",
+                        "queryIndex": query_index,
+                        "query": query.query,
+                        "timeRange": query.suggestedTimeRange,
+                        "environmentId": settings.env_id,
+                        "environmentIndex": environment_index,
+                    }
+                )
+                event_queue.put(
+                    {
+                        "type": "_query_result_internal",
+                        "queryIndex": query_index,
+                        "query": query,
+                        "result": QuerySearchResult("failed", f"环境启动或执行失败: {exc}", "", [], 0),
+                    }
+                )
     finally:
         event_queue.put(None)
 
