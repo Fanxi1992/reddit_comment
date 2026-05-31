@@ -331,8 +331,8 @@ export function QueryPlanWorkspace() {
   }
 
   return (
-    <div className="mx-auto grid w-full max-w-[1600px] gap-4 px-4 py-4 lg:grid-cols-[400px_minmax(0,1fr)] lg:px-6">
-      <aside className="min-w-0 space-y-3 rounded-md border border-slate-200 bg-white p-3.5 shadow-sm lg:sticky lg:top-4 lg:max-h-[calc(100vh-32px)] lg:overflow-y-auto">
+    <div className="mx-auto grid w-full max-w-[1600px] gap-4 px-4 py-3 lg:grid-cols-[400px_minmax(0,1fr)] lg:px-6">
+      <aside className="min-w-0 space-y-2.5 rounded-md border border-slate-200 bg-white p-3 shadow-sm lg:sticky lg:top-3 lg:max-h-[calc(100vh-104px)] lg:overflow-y-auto">
         <div>
           <h2 className="text-base font-semibold text-slate-950">产品上下文</h2>
           <p className="mt-1 text-sm text-slate-500">用于搜索裂解和评论生成提示词。</p>
@@ -349,7 +349,7 @@ export function QueryPlanWorkspace() {
 
         <Field label="产品情况" required>
           <textarea
-            className={`${inputClassName} min-h-28 resize-y leading-6`}
+            className={`${inputClassName} min-h-20 resize-y leading-6`}
             onChange={(event) => updateContext('productDescription', event.target.value)}
             placeholder="产品解决什么问题、核心功能、使用场景、价格/地区等"
             value={context.productDescription}
@@ -358,7 +358,7 @@ export function QueryPlanWorkspace() {
 
         <Field label="目标用户">
           <textarea
-            className={`${inputClassName} min-h-20 resize-y leading-6`}
+            className={`${inputClassName} min-h-16 resize-y leading-6`}
             onChange={(event) => updateContext('targetAudience', event.target.value)}
             placeholder="用户画像、行业、痛点、使用动机"
             value={context.targetAudience}
@@ -367,7 +367,7 @@ export function QueryPlanWorkspace() {
 
         <Field label="卖点">
           <textarea
-            className={`${inputClassName} min-h-20 resize-y leading-6`}
+            className={`${inputClassName} min-h-16 resize-y leading-6`}
             onChange={(event) => updateContext('sellingPoints', event.target.value)}
             placeholder="希望自然带出的优势"
             value={context.sellingPoints}
@@ -376,7 +376,7 @@ export function QueryPlanWorkspace() {
 
         <Field label="竞品">
           <textarea
-            className={`${inputClassName} min-h-16 resize-y leading-6`}
+            className={`${inputClassName} min-h-14 resize-y leading-6`}
             onChange={(event) => updateContext('competitors', event.target.value)}
             placeholder="竞品、替代方案、常被比较的品牌"
             value={context.competitors}
@@ -385,7 +385,7 @@ export function QueryPlanWorkspace() {
 
         <Field label="评论要求">
           <textarea
-            className={`${inputClassName} min-h-24 resize-y leading-6`}
+            className={`${inputClassName} min-h-[72px] resize-y leading-6`}
             onChange={(event) => updateContext('commentRequirements', event.target.value)}
             placeholder="语气、长度、是否允许提品牌、是否需要移动端口吻"
             value={context.commentRequirements}
@@ -394,7 +394,7 @@ export function QueryPlanWorkspace() {
 
         <Field label="禁忌点">
           <textarea
-            className={`${inputClassName} min-h-16 resize-y leading-6`}
+            className={`${inputClassName} min-h-14 resize-y leading-6`}
             onChange={(event) => updateContext('forbiddenTopics', event.target.value)}
             placeholder="不要提及的卖点、地区、价格、竞品或表达方式"
             value={context.forbiddenTopics}
@@ -416,15 +416,17 @@ export function QueryPlanWorkspace() {
               />
             </Field>
 
-            <button
-              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-teal-600 px-4 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-              disabled={!canGenerate}
-              onClick={() => void handleGenerate()}
-              type="button"
-            >
-              <SparkIcon />
-              {isGenerating ? '生成中...' : '生成搜索 Query'}
-            </button>
+            <div className="sticky bottom-0 -mx-3 -mb-3 border-t border-slate-200 bg-white px-3 py-2.5">
+              <button
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-teal-600 px-4 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                disabled={!canGenerate}
+                onClick={() => void handleGenerate()}
+                type="button"
+              >
+                <SparkIcon />
+                {isGenerating ? '生成中...' : '生成搜索 Query'}
+              </button>
+            </div>
           </>
         )}
       </aside>
