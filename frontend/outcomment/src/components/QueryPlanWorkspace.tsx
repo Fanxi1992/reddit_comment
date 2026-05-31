@@ -32,8 +32,11 @@ const DEFAULT_CONTEXT: ProductContext = {
   competitors: '',
   commentRequirements: '',
   forbiddenTopics: '',
-  desiredQueryCount: 6,
+  desiredQueryCount: 12,
 }
+
+const MAX_CANDIDATE_QUERY_COUNT = 20
+const MAX_APPROVED_QUERY_COUNT = 6
 
 const INTENT_OPTIONS: Array<{ value: QueryIntent; label: string }> = [
   { value: 'pain_point', label: '痛点' },
@@ -84,7 +87,7 @@ export function QueryPlanWorkspace() {
     [queries],
   )
   const canGenerate = context.productName.trim() && context.productDescription.trim() && !isGenerating
-  const canApprove = validQueryCount > 0 && !isGenerating
+  const canApprove = validQueryCount > 0 && validQueryCount <= MAX_APPROVED_QUERY_COUNT && !isGenerating
   const canStartSearch = Boolean(approvedPlan?.queries.length) && !isGenerating && !isSearching
   const manualUrlPreview = useMemo(() => parseManualRedditUrls(manualUrlsText), [manualUrlsText])
 
@@ -169,6 +172,11 @@ export function QueryPlanWorkspace() {
 
     if (!approvedQueries.length) {
       setError('至少需要一条有效 Query 才能批准。')
+      return
+    }
+
+    if (approvedQueries.length > MAX_APPROVED_QUERY_COUNT) {
+      setError(`最多只能批准 ${MAX_APPROVED_QUERY_COUNT} 条 Query 进入 Reddit 搜索，请删除或清空多余候选项。`)
       return
     }
 
@@ -403,13 +411,13 @@ export function QueryPlanWorkspace() {
 
         {urlSourceMode === 'search' && (
           <>
-            <Field label="期望 Query 数量">
+            <Field label="候选 Query 数量">
               <input
                 className={inputClassName}
-                max={6}
+                max={MAX_CANDIDATE_QUERY_COUNT}
                 min={1}
                 onChange={(event) =>
-                  updateContext('desiredQueryCount', clampQueryCount(Number(event.target.value) || 6))
+                  updateContext('desiredQueryCount', clampQueryCount(Number(event.target.value) || 12))
                 }
                 type="number"
                 value={context.desiredQueryCount}
@@ -466,7 +474,9 @@ export function QueryPlanWorkspace() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-slate-950">Query 审核列表</h2>
-                <p className="mt-1 text-sm text-slate-500">生成后可人工编辑、删除、补充和批准。</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  生成后可人工编辑、删除、补充和批准；最多批准 {MAX_APPROVED_QUERY_COUNT} 条进入 Reddit 搜索。
+                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
@@ -491,6 +501,12 @@ export function QueryPlanWorkspace() {
               </button>
             </div>
             </div>
+
+            {validQueryCount > MAX_APPROVED_QUERY_COUNT && (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
+                当前有效 Query 为 {validQueryCount} 条。请筛选到最多 {MAX_APPROVED_QUERY_COUNT} 条后再批准执行搜索。
+              </div>
+            )}
 
             {error && (
               <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
@@ -1016,7 +1032,7 @@ function createId(): string {
 }
 
 function clampQueryCount(value: number): number {
-  return Math.min(6, Math.max(1, value))
+  return Math.min(MAX_CANDIDATE_QUERY_COUNT, Math.max(1, value))
 }
 
 const inputClassName =

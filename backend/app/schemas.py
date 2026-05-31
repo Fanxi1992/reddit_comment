@@ -72,7 +72,7 @@ class QueryPlanGenerateRequest(BaseModel):
     competitors: str = Field(default="", max_length=2000)
     commentRequirements: str = Field(default="", max_length=3000)
     forbiddenTopics: str = Field(default="", max_length=2000)
-    desiredQueryCount: int = Field(default=6, ge=1, le=6)
+    desiredQueryCount: int = Field(default=12, ge=1, le=20)
 
 
 class PlannedQuery(BaseModel):
