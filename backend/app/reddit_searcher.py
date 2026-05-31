@@ -125,6 +125,7 @@ class RedditSearchRunner:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.connect_over_cdp(ws_url)
         self._context = self._browser.contexts[0] if self._browser.contexts else self._browser.new_context()
+        self._close_existing_reddit_pages()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -144,6 +145,27 @@ class RedditSearchRunner:
                 self.settings.env_id,
                 self.settings.user_id,
             )
+
+    def _close_existing_reddit_pages(self) -> None:
+        if self._context is None:
+            return
+        for page in list(self._context.pages):
+            try:
+                page_url = (page.url or "").lower()
+            except Exception:
+                continue
+            if "reddit.com" not in page_url:
+                continue
+            try:
+                page.close()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to close existing reddit search tab: env_id=%s user_id=%s url=%s error=%s",
+                    self.settings.env_id,
+                    self.settings.user_id,
+                    page_url,
+                    exc,
+                )
 
     def collect_query(
         self,

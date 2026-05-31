@@ -58,6 +58,7 @@ class DetailEnvironmentRunner:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.connect_over_cdp(ws_url)
         self._context = self._browser.contexts[0] if self._browser.contexts else self._browser.new_context()
+        self._close_existing_reddit_pages()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -77,6 +78,27 @@ class DetailEnvironmentRunner:
                 self.profile.env_id,
                 self.profile.user_id,
             )
+
+    def _close_existing_reddit_pages(self) -> None:
+        if self._context is None:
+            return
+        for page in list(self._context.pages):
+            try:
+                page_url = (page.url or "").lower()
+            except Exception:
+                continue
+            if "reddit.com" not in page_url:
+                continue
+            try:
+                page.close()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to close existing reddit detail tab: env_id=%s user_id=%s url=%s error=%s",
+                    self.profile.env_id,
+                    self.profile.user_id,
+                    page_url,
+                    exc,
+                )
 
     def collect_detail(self, item: RedditSearchResultItem) -> dict[str, Any]:
         if self._context is None:
@@ -160,13 +182,38 @@ class DetailEnvironmentRunner:
         if not has_gate:
             return
 
-        clicked = self._click_mature_content_gate_button(page)
-        if not clicked:
-            return
+        for click_method in [
+            self._click_mature_content_gate_button_with_locator,
+            self._click_mature_content_gate_button_with_mouse,
+            self._click_mature_content_gate_button_with_js,
+        ]:
+            if not self._has_mature_content_gate(page):
+                return
+            if not click_method(page):
+                continue
+            if self._wait_after_mature_content_gate_click(page):
+                return
 
-        self._wait_after_mature_content_gate_click(page)
+    def _has_mature_content_gate(self, page) -> bool:
+        try:
+            return bool(
+                page.evaluate(
+                    """
+                    () => {
+                        const bodyText = (document.body?.innerText || "").toLowerCase();
+                        const over18ButtonCount = Array.from(document.querySelectorAll("button")).filter((button) => {
+                            const text = (button.innerText || button.textContent || "").trim().toLowerCase();
+                            return text.includes("yes, i'm over 18") || text.includes("yes, i’m over 18");
+                        }).length;
+                        return bodyText.includes("mature content") && over18ButtonCount > 0;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
 
-    def _wait_after_mature_content_gate_click(self, page) -> None:
+    def _wait_after_mature_content_gate_click(self, page) -> bool:
         deadline = time.time() + 15.0
         while time.time() < deadline:
             try:
@@ -191,24 +238,36 @@ class DetailEnvironmentRunner:
                 )
             except Exception:
                 gate_state = {}
-            if gate_state.get("hasPost") or not gate_state.get("hasMatureGate"):
-                break
+            if gate_state.get("hasPost"):
+                self._settle_after_mature_content_gate_click(page)
+                return True
+            if not gate_state.get("hasMatureGate"):
+                self._settle_after_mature_content_gate_click(page)
+                return True
             time.sleep(0.3)
+        return False
+
+    def _settle_after_mature_content_gate_click(self, page) -> None:
         try:
             page.wait_for_load_state("networkidle", timeout=5000)
         except Exception:
             pass
         time.sleep(random.uniform(0.5, 1.0))
 
-    def _click_mature_content_gate_button(self, page) -> bool:
+    def _click_mature_content_gate_button_with_locator(self, page) -> bool:
         for pattern in ["Yes, I'm over 18", "Yes, I’m over 18"]:
             try:
                 button = page.get_by_role("button", name=pattern).first
                 if button.count() and button.is_visible(timeout=1000) and button.is_enabled(timeout=1000):
-                    button.click(timeout=3000)
+                    button.scroll_into_view_if_needed(timeout=2000)
+                    time.sleep(random.uniform(0.08, 0.2))
+                    button.click(timeout=3000, force=True)
                     return True
             except Exception:
                 pass
+        return False
+
+    def _click_mature_content_gate_button_with_mouse(self, page) -> bool:
         try:
             box = page.evaluate(
                 """
@@ -227,8 +286,8 @@ class DetailEnvironmentRunner:
                             && !button.disabled;
                     });
                     if (!target) return null;
-                    const rect = target.getBoundingClientRect();
                     target.scrollIntoView({block: "center", inline: "center"});
+                    const rect = target.getBoundingClientRect();
                     return {
                         x: rect.left + rect.width / 2,
                         y: rect.top + rect.height / 2,
@@ -249,6 +308,9 @@ class DetailEnvironmentRunner:
                 return True
         except Exception:
             pass
+        return False
+
+    def _click_mature_content_gate_button_with_js(self, page) -> bool:
         try:
             return bool(
                 page.evaluate(
