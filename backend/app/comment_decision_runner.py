@@ -87,6 +87,7 @@ class DetailEnvironmentRunner:
             page.goto(item.postUrl, wait_until="commit", timeout=20000)
             page.wait_for_load_state("domcontentloaded", timeout=20000)
             self._wait_for_detail_post(page)
+            self._reveal_nsfw_content(page)
             time.sleep(random.uniform(0.8, 1.3))
             observation = self.detail_observer.collect(page, origin="comment_decision")
             comment_tree = self.comment_extractor.collect(page, total_comment_count=observation.comments or 0)
@@ -114,9 +115,10 @@ class DetailEnvironmentRunner:
                 "max_comment_depth": comment_tree.max_depth,
             }
         except Exception as exc:
+            reason = self._build_detail_failure_reason(page, exc)
             return {
                 "status": "failed",
-                "reason": str(exc),
+                "reason": reason,
                 "post_url": normalize_post_url(item.postUrl) or item.postUrl,
                 "final_url": page.url if not page.is_closed() else "",
                 "title": item.title,
@@ -138,15 +140,108 @@ class DetailEnvironmentRunner:
                 pass
 
     def _wait_for_detail_post(self, page) -> None:
-        post = page.locator("shreddit-post").first
-        post.wait_for(state="visible", timeout=15000)
-        if "/comments/" not in page.url:
-            deadline = time.time() + 8.0
-            while time.time() < deadline:
-                if "/comments/" in page.url:
+        deadline = time.time() + 20.0
+        last_error = ""
+        while time.time() < deadline:
+            if "/comments/" not in page.url:
+                time.sleep(0.2)
+                continue
+            try:
+                page.locator("shreddit-post").first.wait_for(state="attached", timeout=1000)
+                if self._has_detail_content_signal(page):
                     return
-                time.sleep(0.1)
+            except Exception as exc:
+                last_error = str(exc)
+            time.sleep(0.2)
+
+        if "/comments/" not in page.url:
             raise RuntimeError(f"detail_url_not_reached:{page.url}")
+        raise RuntimeError(f"detail_post_not_ready:{self._build_detail_page_diagnostics(page)}; last_error={last_error}")
+
+    def _has_detail_content_signal(self, page) -> bool:
+        try:
+            return bool(
+                page.evaluate(
+                    """
+                    () => {
+                        const post = document.querySelector("shreddit-post");
+                        if (!post) return false;
+                        const title = post.getAttribute("post-title") || post.querySelector("h1")?.innerText || "";
+                        const comments = document.querySelectorAll("shreddit-comment").length;
+                        return Boolean(title.trim()) || comments > 0;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    def _reveal_nsfw_content(self, page) -> None:
+        for _ in range(4):
+            try:
+                clicked = bool(
+                    page.evaluate(
+                        """
+                        () => {
+                            const buttons = Array.from(document.querySelectorAll("button"));
+                            const target = buttons.find((button) => {
+                                const text = (button.innerText || button.textContent || "").trim().toLowerCase();
+                                if (!text.includes("view nsfw content")) return false;
+                                const style = window.getComputedStyle(button);
+                                const rect = button.getBoundingClientRect();
+                                return style.visibility !== "hidden"
+                                    && style.display !== "none"
+                                    && Number(style.opacity || "1") > 0
+                                    && rect.width > 0
+                                    && rect.height > 0
+                                    && !button.disabled;
+                            });
+                            if (!target) return false;
+                            target.click();
+                            return true;
+                        }
+                        """
+                    )
+                )
+            except Exception:
+                break
+            if not clicked:
+                break
+            time.sleep(random.uniform(0.25, 0.5))
+        try:
+            page.wait_for_load_state("networkidle", timeout=2500)
+        except Exception:
+            pass
+
+    def _build_detail_failure_reason(self, page, exc: Exception) -> str:
+        diagnostics = self._build_detail_page_diagnostics(page)
+        return f"{exc}; page_diagnostics={diagnostics}"
+
+    def _build_detail_page_diagnostics(self, page) -> dict[str, Any]:
+        if page.is_closed():
+            return {"page_closed": True}
+        try:
+            return page.evaluate(
+                """
+                () => {
+                    const nsfwButtons = Array.from(document.querySelectorAll("button")).filter((button) => {
+                        const text = (button.innerText || button.textContent || "").toLowerCase();
+                        return text.includes("view nsfw content");
+                    });
+                    return {
+                        url: window.location.href,
+                        shredditPostCount: document.querySelectorAll("shreddit-post").length,
+                        hasPostTitleAttr: Boolean(document.querySelector("shreddit-post")?.getAttribute("post-title")),
+                        hasPostH1: Boolean(document.querySelector("shreddit-post h1")),
+                        shredditCommentCount: document.querySelectorAll("shreddit-comment").length,
+                        nsfwButtonCount: nsfwButtons.length,
+                        documentTitle: document.title || "",
+                    };
+                }
+                """
+            )
+        except Exception as diag_exc:
+            return {"diagnostics_failed": str(diag_exc)}
 
     def _start_browser(self) -> str | None:
         url = f"{self.profile.api_url}/api/v1/browser/start"
