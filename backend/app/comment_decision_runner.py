@@ -86,6 +86,7 @@ class DetailEnvironmentRunner:
         try:
             page.goto(item.postUrl, wait_until="commit", timeout=20000)
             page.wait_for_load_state("domcontentloaded", timeout=20000)
+            self._accept_mature_content_gate_if_present(page)
             self._wait_for_detail_post(page)
             time.sleep(random.uniform(0.8, 1.3))
             observation = self.detail_observer.collect(page, origin="comment_decision")
@@ -114,9 +115,10 @@ class DetailEnvironmentRunner:
                 "max_comment_depth": comment_tree.max_depth,
             }
         except Exception as exc:
+            reason = self._build_detail_failure_reason(page, exc)
             return {
                 "status": "failed",
-                "reason": str(exc),
+                "reason": reason,
                 "post_url": normalize_post_url(item.postUrl) or item.postUrl,
                 "final_url": page.url if not page.is_closed() else "",
                 "title": item.title,
@@ -136,6 +138,185 @@ class DetailEnvironmentRunner:
                     page.close()
             except Exception:
                 pass
+
+    def _accept_mature_content_gate_if_present(self, page) -> None:
+        try:
+            has_gate = bool(
+                page.evaluate(
+                    """
+                    () => {
+                        const text = (document.body?.innerText || "").toLowerCase();
+                        const hasButton = Array.from(document.querySelectorAll("button")).some((button) => {
+                            const buttonText = (button.innerText || button.textContent || "").trim().toLowerCase();
+                            return buttonText.includes("yes, i'm over 18") || buttonText.includes("yes, i’m over 18");
+                        });
+                        return hasButton && text.includes("mature content");
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return
+        if not has_gate:
+            return
+
+        clicked = self._click_mature_content_gate_button(page)
+        if not clicked:
+            return
+
+        self._wait_after_mature_content_gate_click(page)
+
+    def _wait_after_mature_content_gate_click(self, page) -> None:
+        deadline = time.time() + 15.0
+        while time.time() < deadline:
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=1000)
+            except Exception:
+                pass
+            try:
+                gate_state = page.evaluate(
+                    """
+                    () => {
+                        const bodyText = (document.body?.innerText || "").toLowerCase();
+                        const over18ButtonCount = Array.from(document.querySelectorAll("button")).filter((button) => {
+                            const text = (button.innerText || button.textContent || "").trim().toLowerCase();
+                            return text.includes("yes, i'm over 18") || text.includes("yes, i’m over 18");
+                        }).length;
+                        return {
+                            hasPost: document.querySelectorAll("shreddit-post").length > 0,
+                            hasMatureGate: bodyText.includes("mature content") && over18ButtonCount > 0,
+                        };
+                    }
+                    """
+                )
+            except Exception:
+                gate_state = {}
+            if gate_state.get("hasPost") or not gate_state.get("hasMatureGate"):
+                break
+            time.sleep(0.3)
+        try:
+            page.wait_for_load_state("networkidle", timeout=5000)
+        except Exception:
+            pass
+        time.sleep(random.uniform(0.5, 1.0))
+
+    def _click_mature_content_gate_button(self, page) -> bool:
+        for pattern in ["Yes, I'm over 18", "Yes, I’m over 18"]:
+            try:
+                button = page.get_by_role("button", name=pattern).first
+                if button.count() and button.is_visible(timeout=1000) and button.is_enabled(timeout=1000):
+                    button.click(timeout=3000)
+                    return True
+            except Exception:
+                pass
+        try:
+            box = page.evaluate(
+                """
+                () => {
+                    const buttons = Array.from(document.querySelectorAll("button"));
+                    const target = buttons.find((button) => {
+                        const text = (button.innerText || button.textContent || "").trim().toLowerCase();
+                        if (!text.includes("yes, i'm over 18") && !text.includes("yes, i’m over 18")) return false;
+                        const style = window.getComputedStyle(button);
+                        const rect = button.getBoundingClientRect();
+                        return style.visibility !== "hidden"
+                            && style.display !== "none"
+                            && Number(style.opacity || "1") > 0
+                            && rect.width > 0
+                            && rect.height > 0
+                            && !button.disabled;
+                    });
+                    if (!target) return null;
+                    const rect = target.getBoundingClientRect();
+                    target.scrollIntoView({block: "center", inline: "center"});
+                    return {
+                        x: rect.left + rect.width / 2,
+                        y: rect.top + rect.height / 2,
+                        width: rect.width,
+                        height: rect.height,
+                    };
+                }
+                """
+            )
+            if box:
+                target_x = float(box["x"]) + random.uniform(-max(1.0, float(box["width"]) * 0.12), max(1.0, float(box["width"]) * 0.12))
+                target_y = float(box["y"]) + random.uniform(-max(1.0, float(box["height"]) * 0.18), max(1.0, float(box["height"]) * 0.18))
+                page.mouse.move(target_x, target_y, steps=random.randint(8, 16))
+                time.sleep(random.uniform(0.08, 0.2))
+                page.mouse.down()
+                time.sleep(random.uniform(0.05, 0.14))
+                page.mouse.up()
+                return True
+        except Exception:
+            pass
+        try:
+            return bool(
+                page.evaluate(
+                    """
+                    () => {
+                        const buttons = Array.from(document.querySelectorAll("button"));
+                        const target = buttons.find((button) => {
+                            const text = (button.innerText || button.textContent || "").trim().toLowerCase();
+                            if (!text.includes("yes, i'm over 18") && !text.includes("yes, i’m over 18")) return false;
+                            const style = window.getComputedStyle(button);
+                            const rect = button.getBoundingClientRect();
+                            return style.visibility !== "hidden"
+                                && style.display !== "none"
+                                && Number(style.opacity || "1") > 0
+                                && rect.width > 0
+                                && rect.height > 0
+                                && !button.disabled;
+                        });
+                        if (!target) return false;
+                        target.click();
+                        return true;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    def _build_detail_failure_reason(self, page, exc: Exception) -> str:
+        diagnostics = self._build_detail_page_diagnostics(page)
+        return f"{exc}; page_diagnostics={diagnostics}"
+
+    def _build_detail_page_diagnostics(self, page) -> dict[str, Any]:
+        if page.is_closed():
+            return {"page_closed": True}
+        try:
+            return page.evaluate(
+                """
+                () => {
+                    const bodyText = (document.body?.innerText || "");
+                    const lowerText = bodyText.toLowerCase();
+                    const buttons = Array.from(document.querySelectorAll("button"));
+                    const over18Buttons = buttons.filter((button) => {
+                        const text = (button.innerText || button.textContent || "").trim().toLowerCase();
+                        return text.includes("yes, i'm over 18") || text.includes("yes, i’m over 18");
+                    });
+                    const nsfwButtons = buttons.filter((button) => {
+                        const text = (button.innerText || button.textContent || "").trim().toLowerCase();
+                        return text.includes("view nsfw content");
+                    });
+                    return {
+                        url: window.location.href,
+                        documentTitle: document.title || "",
+                        hasMatureContentText: lowerText.includes("mature content"),
+                        hasOver18Text: lowerText.includes("over 18"),
+                        over18ButtonCount: over18Buttons.length,
+                        nsfwButtonCount: nsfwButtons.length,
+                        shredditPostCount: document.querySelectorAll("shreddit-post").length,
+                        shredditCommentCount: document.querySelectorAll("shreddit-comment").length,
+                        hasPostH1: Boolean(document.querySelector("shreddit-post h1")),
+                        hasPostTitleAttr: Boolean(document.querySelector("shreddit-post")?.getAttribute("post-title")),
+                        bodyTextPreview: bodyText.slice(0, 240),
+                    };
+                }
+                """
+            )
+        except Exception as diag_exc:
+            return {"diagnostics_failed": str(diag_exc)}
 
     def _wait_for_detail_post(self, page) -> None:
         post = page.locator("shreddit-post").first
@@ -194,7 +375,8 @@ def run_comment_decision_stream(
     requested_concurrency = _load_detail_concurrency()
     urls_per_env = _load_detail_urls_per_env()
     needed_environment_count = (len(search_results) + urls_per_env - 1) // urls_per_env
-    profiles = profiles[: min(needed_environment_count, requested_concurrency, len(profiles), len(search_results))]
+    selected_profile_count = min(needed_environment_count, requested_concurrency, len(profiles), len(search_results))
+    profiles = random.sample(profiles, selected_profile_count)
     chunks = _chunk_evenly(search_results, len(profiles))
     event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
     stop_event = stop_event or threading.Event()

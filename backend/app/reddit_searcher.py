@@ -594,7 +594,8 @@ def run_reddit_search_batch(payload: RedditSearchRequest, stop_event: threading.
     requested_concurrency = _load_search_env_concurrency()
     queries_per_env = _load_search_queries_per_env()
     needed_environment_count = (len(query_assignments) + queries_per_env - 1) // queries_per_env
-    profiles = profiles[: min(needed_environment_count, requested_concurrency, len(profiles), len(query_assignments))]
+    selected_profile_count = min(needed_environment_count, requested_concurrency, len(profiles), len(query_assignments))
+    profiles = random.sample(profiles, selected_profile_count)
     chunks = _chunk_evenly(query_assignments, len(profiles))
     event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
     threads: list[threading.Thread] = []
