@@ -216,6 +216,15 @@ export type CommentDecisionRequestPayload = {
   queries: PlannedQuery[]
   searchResults: RedditSearchResultItem[]
   maxSuggestions?: number
+  commentLengthDistribution?: CommentLengthDistribution
+}
+
+export type CommentLengthStyle = 'short' | 'medium' | 'long'
+
+export type CommentLengthDistribution = {
+  short: number
+  medium: number
+  long: number
 }
 
 export type CommentDecisionResult = {
@@ -228,6 +237,7 @@ export type CommentDecisionResult = {
   commentUrl?: string | null
   commentText?: string | null
   environmentId?: string | null
+  commentLengthStyle?: CommentLengthStyle | null
 }
 
 export type CommentDecisionSummary = {
@@ -247,6 +257,7 @@ export type DecisionPostState = {
   environmentId?: string | null
   commentUrl?: string | null
   commentText?: string | null
+  commentLengthStyle?: CommentLengthStyle | null
 }
 
 export type DecisionEnvironmentState = {

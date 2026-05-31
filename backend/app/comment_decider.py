@@ -53,6 +53,7 @@ def generate_comment_decision(
     product_context: QueryPlanGenerateRequest,
     search_result: RedditSearchResultItem,
     detail: dict[str, Any],
+    comment_length_style: str = "medium",
 ) -> dict[str, Any]:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -66,7 +67,7 @@ def generate_comment_decision(
         return _skipped("帖子正文和首屏评论都不足，已跳过")
 
     client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_SECONDS * 1000))
-    contents: list[Any] = [_build_prompt(product_context, search_result, detail, allowed_targets)]
+    contents: list[Any] = [_build_prompt(product_context, search_result, detail, allowed_targets, comment_length_style)]
     contents.extend(_build_image_parts(detail))
 
     response = client.models.generate_content(
@@ -93,6 +94,7 @@ def _build_prompt(
     search_result: RedditSearchResultItem,
     detail: dict[str, Any],
     allowed_targets: dict[str, str],
+    comment_length_style: str,
 ) -> str:
     payload = {
         "task": (
@@ -122,6 +124,7 @@ def _build_prompt(
         "source_search_result": search_result.model_dump(),
         "post_detail": _limited_detail_for_prompt(detail),
         "allowed_comment_targets": allowed_targets,
+        "comment_length_guidance": _comment_length_guidance(comment_length_style),
         "output_examples": [
             {
                 "shouldComment": True,
@@ -136,6 +139,33 @@ def _build_prompt(
         ],
     }
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _comment_length_guidance(style: str) -> dict[str, str]:
+    guidance = {
+        "short": {
+            "selected_length": "short",
+            "instruction": (
+                "Write a short Reddit comment: 1-2 sentences, about 25-60 English words. "
+                "Keep it direct, lightweight, and natural, like a quick useful reply."
+            ),
+        },
+        "medium": {
+            "selected_length": "medium",
+            "instruction": (
+                "Write a medium-length Reddit comment: 2-4 sentences, about 60-120 English words. "
+                "Include a little reasoning, comparison, or context while staying conversational."
+            ),
+        },
+        "long": {
+            "selected_length": "long",
+            "instruction": (
+                "Write a longer Reddit comment: 4-7 sentences, about 120-220 English words. "
+                "Use this space for nuanced comparisons, caveats, or practical reasoning, but do not sound like marketing copy."
+            ),
+        },
+    }
+    return guidance.get(style, guidance["medium"])
 
 
 def _limited_detail_for_prompt(detail: dict[str, Any]) -> dict[str, Any]:

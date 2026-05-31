@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 from app.comment_decider import generate_comment_decision
 from app.reddit_detail_collector import LoadedCommentTreeExtractor, PostDetailObservationCollector
 from app.reddit_searcher import normalize_post_url
-from app.schemas import CommentDecisionRequest, RedditSearchResultItem
+from app.schemas import CommentDecisionRequest, CommentLengthDistribution, RedditSearchResultItem
 
 
 MAX_COMMENTS_PER_POST = 30
@@ -316,10 +316,12 @@ def _run_environment_worker(
                 event_queue.put({"type": "gemini_started", "environmentId": profile.env_id, "postUrl": item.postUrl})
 
                 try:
+                    comment_length_style = _choose_comment_length_style(payload.commentLengthDistribution)
                     decision = generate_comment_decision(
                         product_context=payload.productContext,
                         search_result=item,
                         detail=detail,
+                        comment_length_style=comment_length_style,
                     )
                     result = _make_result(
                         item,
@@ -330,6 +332,7 @@ def _run_environment_worker(
                         subreddit=detail.get("subreddit") or item.subreddit,
                         comment_url=decision.get("commentUrl"),
                         comment_text=decision.get("commentText"),
+                        comment_length_style=comment_length_style,
                     )
                     result = _apply_success_budget(result, payload.maxSuggestions, success_budget, success_lock, stop_event)
                 except Exception as exc:
@@ -454,6 +457,7 @@ def _make_result(
     subreddit: str | None = None,
     comment_url: str | None = None,
     comment_text: str | None = None,
+    comment_length_style: str | None = None,
 ) -> dict[str, Any]:
     return {
         "postUrl": item.postUrl,
@@ -465,7 +469,17 @@ def _make_result(
         "commentUrl": comment_url,
         "commentText": comment_text,
         "environmentId": environment_id,
+        "commentLengthStyle": comment_length_style,
     }
+
+
+def _choose_comment_length_style(distribution: CommentLengthDistribution) -> str:
+    roll = random.randint(1, 100)
+    if roll <= distribution.short:
+        return "short"
+    if roll <= distribution.short + distribution.medium:
+        return "medium"
+    return "long"
 
 
 def _apply_success_budget(

@@ -7,6 +7,7 @@ import type {
   CommentDecisionResult,
   CommentDecisionStreamEvent,
   CommentDecisionSummary,
+  CommentLengthDistribution,
   DecisionEnvironmentState,
   DecisionPostState,
   RedditSearchResultItem,
@@ -22,6 +23,11 @@ export function CommentDecisionPanel({ approvedPlan, searchResults }: CommentDec
   const [isDeciding, setIsDeciding] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [maxSuggestions, setMaxSuggestions] = useState('')
+  const [lengthDistribution, setLengthDistribution] = useState<CommentLengthDistribution>({
+    short: 30,
+    medium: 50,
+    long: 20,
+  })
   const [summary, setSummary] = useState<CommentDecisionSummary | null>(null)
   const [results, setResults] = useState<CommentDecisionResult[]>([])
   const [postStates, setPostStates] = useState<Record<string, DecisionPostState>>(() =>
@@ -60,6 +66,7 @@ export function CommentDecisionPanel({ approvedPlan, searchResults }: CommentDec
           queries: approvedPlan.queries,
           searchResults,
           maxSuggestions: parseMaxSuggestions(maxSuggestions),
+          commentLengthDistribution: lengthDistribution,
         },
         signal: controller.signal,
         onEvent: applyDecisionEvent,
@@ -262,6 +269,45 @@ export function CommentDecisionPanel({ approvedPlan, searchResults }: CommentDec
         </div>
       )}
 
+      <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-950">评论长度分布</h3>
+            <p className="mt-1 text-xs text-slate-500">后端会按这个概率为每条帖子随机选择短、中、长评论指令。</p>
+          </div>
+          <div className="text-xs font-semibold text-slate-600">
+            短 {lengthDistribution.short}% · 中 {lengthDistribution.medium}% · 长 {lengthDistribution.long}%
+          </div>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          <LengthSlider
+            disabled={isDeciding}
+            label="短评论比例"
+            max={100}
+            value={lengthDistribution.short}
+            onChange={(value) => {
+              const short = value
+              const medium = Math.min(lengthDistribution.medium, 100 - short)
+              setLengthDistribution({ short, medium, long: 100 - short - medium })
+            }}
+          />
+          <LengthSlider
+            disabled={isDeciding}
+            label="中评论比例"
+            max={100 - lengthDistribution.short}
+            value={lengthDistribution.medium}
+            onChange={(medium) =>
+              setLengthDistribution({
+                short: lengthDistribution.short,
+                medium,
+                long: 100 - lengthDistribution.short - medium,
+              })
+            }
+          />
+          <LengthSlider disabled label="长评论比例" max={100} value={lengthDistribution.long} />
+        </div>
+      </div>
+
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
         <Metric label="总 URL" value={currentSummary.totalPosts} />
         <Metric label="已处理" value={currentSummary.processedPosts} />
@@ -410,6 +456,39 @@ function fallbackPostState(result: Pick<CommentDecisionResult, 'postUrl' | 'sour
 function parseMaxSuggestions(value: string): number | undefined {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : undefined
+}
+
+function LengthSlider({
+  disabled = false,
+  label,
+  max,
+  value,
+  onChange,
+}: {
+  disabled?: boolean
+  label: string
+  max: number
+  value: number
+  onChange?: (value: number) => void
+}) {
+  return (
+    <label className="block">
+      <div className="mb-1 flex items-center justify-between gap-2 text-xs font-semibold text-slate-600">
+        <span>{label}</span>
+        <span>{value}%</span>
+      </div>
+      <input
+        className="w-full accent-teal-600 disabled:opacity-60"
+        disabled={disabled || !onChange}
+        max={max}
+        min={0}
+        onChange={(event) => onChange?.(Number(event.target.value))}
+        step={1}
+        type="range"
+        value={value}
+      />
+    </label>
+  )
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

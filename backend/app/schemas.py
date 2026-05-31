@@ -120,6 +120,19 @@ class RedditSearchSummary(BaseModel):
 
 
 CommentDecisionStatus = Literal["success", "skipped", "failed"]
+CommentLengthStyle = Literal["short", "medium", "long"]
+
+
+class CommentLengthDistribution(BaseModel):
+    short: int = Field(default=30, ge=0, le=100)
+    medium: int = Field(default=50, ge=0, le=100)
+    long: int = Field(default=20, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_total(self) -> "CommentLengthDistribution":
+        if self.short + self.medium + self.long != 100:
+            raise ValueError("评论长度比例总和必须等于 100")
+        return self
 
 
 class CommentDecisionRequest(BaseModel):
@@ -127,6 +140,7 @@ class CommentDecisionRequest(BaseModel):
     queries: list[PlannedQuery] = Field(..., min_length=1, max_length=6)
     searchResults: list[RedditSearchResultItem] = Field(..., min_length=1, max_length=500)
     maxSuggestions: int | None = Field(default=None, ge=1, le=200)
+    commentLengthDistribution: CommentLengthDistribution = Field(default_factory=CommentLengthDistribution)
 
 
 class CommentDecisionResult(BaseModel):
@@ -139,6 +153,7 @@ class CommentDecisionResult(BaseModel):
     commentUrl: str | None = None
     commentText: str | None = None
     environmentId: str | None = None
+    commentLengthStyle: CommentLengthStyle | None = None
 
 
 class CommentDecisionSummary(BaseModel):
