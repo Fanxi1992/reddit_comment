@@ -146,21 +146,21 @@ def _comment_length_guidance(style: str) -> dict[str, str]:
         "short": {
             "selected_length": "short",
             "instruction": (
-                "Write a short Reddit comment: 1-2 sentences, about 25-60 English words. "
+                "Write a short Reddit comment: 1 sentence, about 15-35 English words. "
                 "Keep it direct, lightweight, and natural, like a quick useful reply."
             ),
         },
         "medium": {
             "selected_length": "medium",
             "instruction": (
-                "Write a medium-length Reddit comment: 2-4 sentences, about 60-120 English words. "
+                "Write a medium-length Reddit comment: 1-2 sentences, about 40-60 English words. "
                 "Include a little reasoning, comparison, or context while staying conversational."
             ),
         },
         "long": {
             "selected_length": "long",
             "instruction": (
-                "Write a longer Reddit comment: 4-7 sentences, about 120-220 English words. "
+                "Write a longer Reddit comment: 2-4 sentences, about 65-100 English words. "
                 "Use this space for nuanced comparisons, caveats, or practical reasoning, but do not sound like marketing copy."
             ),
         },
