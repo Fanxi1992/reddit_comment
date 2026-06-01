@@ -634,6 +634,7 @@ def run_reddit_search_batch(payload: RedditSearchRequest, stop_event: threading.
     completed_workers = 0
     pending_results: dict[int, dict[str, Any]] = {}
     next_query_index = 1
+    completed_normally = False
 
     try:
         while completed_workers < len(threads):
@@ -672,8 +673,10 @@ def run_reddit_search_batch(payload: RedditSearchRequest, stop_event: threading.
             "summary": summary.model_dump(),
             "results": [item.model_dump() for item in deduper.sorted_results()],
         }
+        completed_normally = True
     finally:
-        stop_event.set()
+        if not completed_normally:
+            stop_event.set()
         for thread in threads:
             thread.join()
 
