@@ -409,7 +409,7 @@ class DetailEnvironmentRunner:
                     return payload.get("data", {}).get("ws", {}).get("puppeteer")
                 last_error = str(payload.get("msg") or "failed")
 
-            if "too many request" not in last_error.lower() or attempt >= ADSPOWER_BROWSER_START_RETRIES - 1:
+            if attempt >= ADSPOWER_BROWSER_START_RETRIES - 1:
                 break
             time.sleep(1.2 * (attempt + 1))
         raise RuntimeError(f"adspower_browser_start_failed:{last_error or 'unknown'}")

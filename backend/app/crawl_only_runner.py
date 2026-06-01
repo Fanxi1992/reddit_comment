@@ -1,4 +1,5 @@
 import json
+import os
 import queue
 import re
 import threading
@@ -27,6 +28,7 @@ from app.schemas import (
 
 OUTPUT_ROOT = Path(__file__).resolve().parents[1] / "data" / "crawl_outputs"
 MAX_CRAWL_ONLY_POSTS = 120
+DEFAULT_SIMULATED_SEARCH_TO_DETAIL_COOLDOWN_SECONDS = 7.0
 
 
 def run_crawl_only_stream(payload: CrawlOnlyRequest, stop_event: threading.Event | None = None) -> Iterator[dict[str, Any]]:
@@ -74,6 +76,11 @@ def run_crawl_only_stream(payload: CrawlOnlyRequest, stop_event: threading.Event
     if not limited_results:
         yield {"type": "error", "message": "没有可抓取的去重 Reddit URL"}
         return
+
+    if payload.source == "simulated_search":
+        _wait_for_adspower_cooldown(_load_simulated_search_to_detail_cooldown(), stop_event)
+        if stop_event.is_set():
+            return
 
     detail_results = yield from _run_detail_crawl(payload, limited_results, search_metadata, stop_event)
     if stop_event.is_set():
@@ -428,6 +435,24 @@ def _build_locked_search_metadata(
         "summary": summary,
         "results": [item.model_dump() for item in results],
     }
+
+
+def _load_simulated_search_to_detail_cooldown() -> float:
+    raw_value = os.getenv("SIMULATED_SEARCH_TO_DETAIL_COOLDOWN_SECONDS", "").strip()
+    if not raw_value:
+        return DEFAULT_SIMULATED_SEARCH_TO_DETAIL_COOLDOWN_SECONDS
+    try:
+        return max(0.0, float(raw_value))
+    except ValueError:
+        return DEFAULT_SIMULATED_SEARCH_TO_DETAIL_COOLDOWN_SECONDS
+
+
+def _wait_for_adspower_cooldown(seconds: float, stop_event: threading.Event) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if stop_event.is_set():
+            return
+        time.sleep(min(0.25, deadline - time.monotonic()))
 
 
 def _build_failed_result(item: RedditSearchResultItem, reason: str, environment_id: str | None) -> dict[str, Any]:
