@@ -390,7 +390,7 @@ export function QueryPlanWorkspace() {
       <aside className="min-w-0 space-y-2.5 rounded-md border border-slate-200 bg-white p-3 shadow-sm lg:sticky lg:top-3 lg:max-h-[calc(100vh-104px)] lg:overflow-y-auto">
         <div>
           <h2 className="text-base font-semibold text-slate-950">产品上下文</h2>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className={`mt-1 text-sm ${isCrawlSearchMode || isCrawlManualMode ? 'font-semibold text-rose-600' : 'text-slate-500'}`}>
             {isCrawlSearchMode || isCrawlManualMode ? '仅评论生成模式使用；仅抓取模式不要求填写。' : '用于搜索裂解和评论生成提示词。'}
           </p>
         </div>
@@ -664,6 +664,9 @@ export function QueryPlanWorkspace() {
                   {isCrawlManualMode
                     ? '一行一个 Reddit 帖子 URL，系统会校验、去重，然后进入语料仅抓取。'
                     : '一行一个 Reddit 帖子 URL，系统会校验、去重，然后直接进入评论决策。'}
+                </p>
+                <p className="mt-1 text-sm font-semibold text-rose-600">
+                  手动导入 URL 最多支持 {MAX_CRAWL_ONLY_URL_COUNT} 条有效去重 URL。
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
