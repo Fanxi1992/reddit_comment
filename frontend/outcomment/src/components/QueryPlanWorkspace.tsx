@@ -283,8 +283,8 @@ export function QueryPlanWorkspace() {
       setManualUrlError('请粘贴至少一个有效的 Reddit 帖子 URL。')
       return
     }
-    if (isCrawlManualMode && manualUrlPreview.valid.length > MAX_CRAWL_ONLY_URL_COUNT) {
-      setManualUrlError(`仅抓取模式最多支持 ${MAX_CRAWL_ONLY_URL_COUNT} 条有效去重 URL，请删减后再开始。`)
+    if ((isCommentManualMode || isCrawlManualMode) && manualUrlPreview.valid.length > MAX_CRAWL_ONLY_URL_COUNT) {
+      setManualUrlError(`手动导入 URL 最多支持 ${MAX_CRAWL_ONLY_URL_COUNT} 条有效去重 URL，请删减后再开始。`)
       return
     }
 
@@ -685,7 +685,7 @@ export function QueryPlanWorkspace() {
                 </button>
                 <button
                   className="inline-flex h-9 items-center gap-1 rounded-md bg-teal-600 px-3 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  disabled={!manualUrlPreview.valid.length || (isCrawlManualMode && manualUrlPreview.valid.length > MAX_CRAWL_ONLY_URL_COUNT)}
+                  disabled={!manualUrlPreview.valid.length || manualUrlPreview.valid.length > MAX_CRAWL_ONLY_URL_COUNT}
                   onClick={prepareManualUrls}
                   type="button"
                 >
@@ -722,9 +722,9 @@ export function QueryPlanWorkspace() {
               <Metric label="无效/重复" value={manualUrlPreview.invalid.length + manualUrlPreview.duplicateCount} />
             </div>
 
-            {isCrawlManualMode && manualUrlPreview.valid.length > MAX_CRAWL_ONLY_URL_COUNT ? (
+            {(isCommentManualMode || isCrawlManualMode) && manualUrlPreview.valid.length > MAX_CRAWL_ONLY_URL_COUNT ? (
               <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
-                当前有效去重 URL 为 {manualUrlPreview.valid.length} 条，仅抓取模式最多支持 {MAX_CRAWL_ONLY_URL_COUNT} 条。
+                当前有效去重 URL 为 {manualUrlPreview.valid.length} 条，手动导入 URL 最多支持 {MAX_CRAWL_ONLY_URL_COUNT} 条。
               </div>
             ) : null}
 

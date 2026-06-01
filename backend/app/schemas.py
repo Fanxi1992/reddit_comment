@@ -138,7 +138,7 @@ class CommentLengthDistribution(BaseModel):
 class CommentDecisionRequest(BaseModel):
     productContext: QueryPlanGenerateRequest
     queries: list[PlannedQuery] = Field(..., min_length=1, max_length=6)
-    searchResults: list[RedditSearchResultItem] = Field(..., min_length=1, max_length=500)
+    searchResults: list[RedditSearchResultItem] = Field(..., min_length=1, max_length=120)
     maxSuggestions: int | None = Field(default=None, ge=1, le=200)
     commentLengthDistribution: CommentLengthDistribution = Field(default_factory=CommentLengthDistribution)
 
