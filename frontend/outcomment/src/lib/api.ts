@@ -1,5 +1,7 @@
 import type {
   ProductContext,
+  CrawlOnlyRequestPayload,
+  CrawlOnlyStreamEvent,
   QueryPlanGenerateResponse,
   PostInput,
   CommentDecisionRequestPayload,
@@ -155,6 +157,56 @@ export async function streamCommentDecisions({
   await readNdjsonStream(response, onEvent)
 }
 
+export async function streamCrawlOnly({
+  payload,
+  signal,
+  onEvent,
+}: {
+  payload: CrawlOnlyRequestPayload
+  signal?: AbortSignal
+  onEvent: (event: CrawlOnlyStreamEvent) => void
+}): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/crawl-only/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+    },
+    body: JSON.stringify({
+      ...payload,
+      maxCommentsPerPost: payload.maxCommentsPerPost ?? 30,
+      perQueryLimit: payload.perQueryLimit ?? 20,
+    }),
+    signal,
+  })
+
+  if (!response.ok) {
+    const errorText = await readErrorMessage(response)
+    throw new Error(errorText || `请求失败：${response.status}`)
+  }
+
+  await readNdjsonStream(response, onEvent)
+}
+
+export async function downloadCrawlOnlyArtifact(artifactId: string, format: 'markdown' | 'json'): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/crawl-only/artifacts/${artifactId}/${format}`)
+
+  if (!response.ok) {
+    const errorText = await readErrorMessage(response)
+    throw new Error(errorText || `下载失败：${response.status}`)
+  }
+
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = readDownloadFileName(response, `reddit-crawl-${artifactId}.${format === 'json' ? 'json' : 'md'}`)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
 async function readNdjsonStream<T>(response: Response, onEvent: (event: T) => void): Promise<void> {
   const reader = response.body?.getReader()
   if (!reader) {
@@ -209,4 +261,19 @@ async function readErrorMessage(response: Response): Promise<string> {
   }
 
   return response.text()
+}
+
+function readDownloadFileName(response: Response, fallback: string): string {
+  const disposition = response.headers.get('content-disposition')
+  if (!disposition) {
+    return fallback
+  }
+
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1])
+  }
+
+  const simpleMatch = disposition.match(/filename="?([^"]+)"?/i)
+  return simpleMatch?.[1] ?? fallback
 }

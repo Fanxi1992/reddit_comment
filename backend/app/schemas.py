@@ -162,3 +162,41 @@ class CommentDecisionSummary(BaseModel):
     successCount: int
     skippedCount: int
     failedCount: int
+
+
+CrawlOnlySource = Literal["simulated_search", "manual_urls"]
+CrawlOnlyStatus = Literal["success", "skipped", "failed"]
+
+
+class CrawlOnlyRequest(BaseModel):
+    source: CrawlOnlySource
+    queries: list[PlannedQuery] | None = Field(default=None, max_length=6)
+    urls: list[HttpUrl] | None = Field(default=None, max_length=500)
+    maxCommentsPerPost: int = Field(default=30, ge=1, le=200)
+    perQueryLimit: int = Field(default=20, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_source_inputs(self) -> "CrawlOnlyRequest":
+        if self.source == "simulated_search" and not self.queries:
+            raise ValueError("模拟搜索（仅抓取）至少需要 1 条 query")
+        if self.source == "manual_urls" and not self.urls:
+            raise ValueError("手动导入 URL（仅抓取）至少需要 1 条 Reddit URL")
+        return self
+
+
+class CrawlOnlyResult(BaseModel):
+    postUrl: str
+    title: str | None = None
+    subreddit: str | None = None
+    status: CrawlOnlyStatus
+    reason: str | None = None
+    environmentId: str | None = None
+    detail: dict | None = None
+
+
+class CrawlOnlySummary(BaseModel):
+    totalPosts: int
+    processedPosts: int
+    successCount: int
+    skippedCount: int
+    failedCount: int

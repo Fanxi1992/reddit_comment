@@ -43,10 +43,11 @@ class AdsPowerProfile:
 
 
 class DetailEnvironmentRunner:
-    def __init__(self, profile: AdsPowerProfile) -> None:
+    def __init__(self, profile: AdsPowerProfile, max_comments_per_post: int = MAX_COMMENTS_PER_POST) -> None:
         self.profile = profile
         self.detail_observer = PostDetailObservationCollector()
         self.comment_extractor = LoadedCommentTreeExtractor()
+        self.max_comments_per_post = max_comments_per_post
         self._playwright = None
         self._browser = None
         self._context = None
@@ -113,7 +114,7 @@ class DetailEnvironmentRunner:
             time.sleep(random.uniform(0.8, 1.3))
             observation = self.detail_observer.collect(page, origin="comment_decision")
             comment_tree = self.comment_extractor.collect(page, total_comment_count=observation.comments or 0)
-            limited_comment_tree = comment_tree.to_limited_dict(MAX_COMMENTS_PER_POST)
+            limited_comment_tree = comment_tree.to_limited_dict(self.max_comments_per_post)
             return {
                 "status": "success",
                 "reason": "",

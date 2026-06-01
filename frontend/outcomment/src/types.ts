@@ -330,3 +330,113 @@ export type CommentDecisionStreamEvent =
       type: 'error'
       message: string
     }
+
+export type CrawlOnlySource = 'simulated_search' | 'manual_urls'
+
+export type CrawlOnlyRequestPayload = {
+  source: CrawlOnlySource
+  queries?: PlannedQuery[]
+  urls?: string[]
+  maxCommentsPerPost?: number
+  perQueryLimit?: number
+}
+
+export type CrawlOnlyResult = {
+  postUrl: string
+  title?: string | null
+  subreddit?: string | null
+  status: 'success' | 'skipped' | 'failed'
+  reason?: string | null
+  environmentId?: string | null
+  searchResult?: RedditSearchResultItem
+  detail?: Record<string, unknown> | null
+}
+
+export type CrawlOnlySummary = {
+  totalPosts: number
+  processedPosts: number
+  successCount: number
+  skippedCount: number
+  failedCount: number
+}
+
+export type CrawlOnlyArtifact = {
+  artifactId: string
+  jsonPath?: string
+  markdownPath?: string
+}
+
+export type CrawlOnlyStreamEvent =
+  | {
+      type: 'crawl_started'
+      source: CrawlOnlySource
+      maxCommentsPerPost: number
+      perQueryLimit: number
+    }
+  | {
+      type: 'search_started'
+      totalQueries: number
+      perQueryLimit: number
+      searchSort: 'relevance'
+    }
+  | {
+      type: 'query_started'
+      queryIndex: number
+      query: string
+      timeRange: SuggestedTimeRange
+      environmentId?: string
+      environmentIndex?: number
+    }
+  | {
+      type: 'query_result'
+      queryIndex: number
+      query: string
+      status: Exclude<RedditSearchStatus, 'pending' | 'running'>
+      reason: string
+      searchResultsUrl: string
+      rawResultCount: number
+      uniqueResultCount: number
+      results: RedditSearchResultItem[]
+    }
+  | {
+      type: 'search_completed'
+      summary: RedditSearchSummary
+      results: RedditSearchResultItem[]
+    }
+  | {
+      type: 'environment_started'
+      environmentId: string
+      environmentIndex: number
+      userId: string
+      totalPosts: number
+    }
+  | {
+      type: 'environment_finished'
+      environmentId: string
+      environmentIndex: number
+      userId: string
+      totalPosts: number
+    }
+  | {
+      type: 'post_started'
+      environmentId: string
+      postUrl: string
+      title: string
+    }
+  | {
+      type: 'post_result'
+      environmentId: string
+      result: CrawlOnlyResult
+    }
+  | ({
+      type: 'artifact_ready'
+    } & CrawlOnlyArtifact)
+  | ({
+      type: 'done'
+      summary: CrawlOnlySummary
+      results: CrawlOnlyResult[]
+    } & CrawlOnlyArtifact)
+  | {
+      type: 'error'
+      message: string
+    }

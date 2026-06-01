@@ -23,6 +23,7 @@ import type {
 } from '../types'
 import { CheckIcon, DownloadIcon, PlayIcon, PlusIcon, SparkIcon, StopIcon, TrashIcon, UploadIcon } from './icons'
 import { CommentDecisionPanel } from './CommentDecisionPanel'
+import { CrawlOnlyPanel } from './CrawlOnlyPanel'
 
 const DEFAULT_CONTEXT: ProductContext = {
   productName: '',
@@ -63,12 +64,13 @@ const EMPTY_QUERY: PlannedQueryPayload = {
   suggestedTimeRange: 'week',
 }
 
-type UrlSourceMode = 'search' | 'manual'
+type UrlSourceMode = 'search' | 'manual' | 'crawl-search' | 'crawl-manual'
 
 export function QueryPlanWorkspace() {
   const [urlSourceMode, setUrlSourceMode] = useState<UrlSourceMode>('search')
   const [context, setContext] = useState<ProductContext>(DEFAULT_CONTEXT)
   const [queries, setQueries] = useState<PlannedQuery[]>([])
+  const [crawlQueries, setCrawlQueries] = useState<PlannedQuery[]>([createPlannedQuery(EMPTY_QUERY)])
   const [approvedPlan, setApprovedPlan] = useState<ApprovedQueryPlan | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -86,10 +88,26 @@ export function QueryPlanWorkspace() {
     () => queries.filter((item) => item.query.trim() && item.reason.trim()).length,
     [queries],
   )
+  const validCrawlQueries = useMemo(
+    () =>
+      crawlQueries
+        .map((item) => ({
+          ...item,
+          query: item.query.trim(),
+          reason: item.reason.trim() || 'Manual simulated search query',
+        }))
+        .filter((item) => item.query)
+        .slice(0, MAX_APPROVED_QUERY_COUNT),
+    [crawlQueries],
+  )
   const canGenerate = context.productName.trim() && context.productDescription.trim() && !isGenerating
   const canApprove = validQueryCount > 0 && validQueryCount <= MAX_APPROVED_QUERY_COUNT && !isGenerating
   const canStartSearch = Boolean(approvedPlan?.queries.length) && !isGenerating && !isSearching
   const manualUrlPreview = useMemo(() => parseManualRedditUrls(manualUrlsText), [manualUrlsText])
+  const isCommentSearchMode = urlSourceMode === 'search'
+  const isCommentManualMode = urlSourceMode === 'manual'
+  const isCrawlSearchMode = urlSourceMode === 'crawl-search'
+  const isCrawlManualMode = urlSourceMode === 'crawl-manual'
 
   const resetSearchState = () => {
     searchAbortRef.current?.abort()
@@ -157,6 +175,26 @@ export function QueryPlanWorkspace() {
   const removeQuery = (id: string) => {
     setQueries((current) => current.filter((item) => item.id !== id))
     setApprovedPlan(null)
+    resetSearchState()
+  }
+
+  const updateCrawlQuery = <K extends keyof PlannedQuery>(id: string, key: K, value: PlannedQuery[K]) => {
+    setCrawlQueries((current) => current.map((item) => (item.id === id ? { ...item, [key]: value } : item)))
+    resetSearchState()
+  }
+
+  const addCrawlQuery = () => {
+    setCrawlQueries((current) =>
+      current.length >= MAX_APPROVED_QUERY_COUNT ? current : [...current, createPlannedQuery(EMPTY_QUERY)],
+    )
+    resetSearchState()
+  }
+
+  const removeCrawlQuery = (id: string) => {
+    setCrawlQueries((current) => {
+      const next = current.filter((item) => item.id !== id)
+      return next.length ? next : [createPlannedQuery(EMPTY_QUERY)]
+    })
     resetSearchState()
   }
 
@@ -236,7 +274,7 @@ export function QueryPlanWorkspace() {
   }
 
   const prepareManualUrls = () => {
-    if (!context.productName.trim() || !context.productDescription.trim()) {
+    if (isCommentManualMode && (!context.productName.trim() || !context.productDescription.trim())) {
       setManualUrlError('产品名称和产品情况是必填项。')
       return
     }
@@ -253,11 +291,15 @@ export function QueryPlanWorkspace() {
       suggestedTimeRange: 'all',
     })
     const manualResults = manualUrlPreview.valid.map((url, index) => buildManualSearchResult(url, index + 1))
-    setApprovedPlan({
-      productContext: { ...context, desiredQueryCount: 1 },
-      queries: [manualQuery],
-      approvedAt: new Date().toISOString(),
-    })
+    setApprovedPlan(
+      isCommentManualMode
+        ? {
+            productContext: { ...context, desiredQueryCount: 1 },
+            queries: [manualQuery],
+            approvedAt: new Date().toISOString(),
+          }
+        : null,
+    )
     setSearchResults(manualResults)
     setSearchSummary({
       totalQueries: 1,
@@ -343,10 +385,12 @@ export function QueryPlanWorkspace() {
       <aside className="min-w-0 space-y-2.5 rounded-md border border-slate-200 bg-white p-3 shadow-sm lg:sticky lg:top-3 lg:max-h-[calc(100vh-104px)] lg:overflow-y-auto">
         <div>
           <h2 className="text-base font-semibold text-slate-950">产品上下文</h2>
-          <p className="mt-1 text-sm text-slate-500">用于搜索裂解和评论生成提示词。</p>
+          <p className="mt-1 text-sm text-slate-500">
+            {isCrawlSearchMode || isCrawlManualMode ? '仅评论生成模式使用；仅抓取模式不要求填写。' : '用于搜索裂解和评论生成提示词。'}
+          </p>
         </div>
 
-        <Field label="产品名称" required>
+        <Field label="产品名称" required={!isCrawlSearchMode && !isCrawlManualMode}>
           <input
             className={inputClassName}
             onChange={(event) => updateContext('productName', event.target.value)}
@@ -355,7 +399,7 @@ export function QueryPlanWorkspace() {
           />
         </Field>
 
-        <Field label="产品情况" required>
+        <Field label="产品情况" required={!isCrawlSearchMode && !isCrawlManualMode}>
           <textarea
             className={`${inputClassName} min-h-20 resize-y leading-6`}
             onChange={(event) => updateContext('productDescription', event.target.value)}
@@ -409,7 +453,7 @@ export function QueryPlanWorkspace() {
           />
         </Field>
 
-        {urlSourceMode === 'search' && (
+        {isCommentSearchMode && (
           <>
             <Field label="候选 Query 数量">
               <input
@@ -444,32 +488,31 @@ export function QueryPlanWorkspace() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold text-slate-950">URL 来源</h2>
-              <p className="mt-1 text-sm text-slate-500">选择通过 AI 搜索裂解获取 URL，或直接粘贴已准备好的 Reddit 帖子 URL。</p>
+              <p className="mt-1 text-sm text-slate-500">选择 URL 获取方式和后续处理目标。</p>
             </div>
-            <div className="grid grid-cols-2 rounded-md bg-slate-100 p-0.5">
-              <button
-                className={`h-9 rounded-md px-3 text-sm font-semibold transition ${
-                  urlSourceMode === 'search' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'
-                }`}
-                onClick={() => changeUrlSourceMode('search')}
-                type="button"
-              >
-                AI 裂解搜索
-              </button>
-              <button
-                className={`h-9 rounded-md px-3 text-sm font-semibold transition ${
-                  urlSourceMode === 'manual' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'
-                }`}
-                onClick={() => changeUrlSourceMode('manual')}
-                type="button"
-              >
-                手动导入 URL
-              </button>
+            <div className="grid grid-cols-2 rounded-md bg-slate-100 p-0.5 xl:grid-cols-4">
+              {[
+                { value: 'search', label: 'AI 裂解搜索' },
+                { value: 'manual', label: '手动导入 URL' },
+                { value: 'crawl-search', label: '模拟搜索（仅抓取）' },
+                { value: 'crawl-manual', label: '手动导入 URL（仅抓取）' },
+              ].map((option) => (
+                <button
+                  className={`h-9 rounded-md px-3 text-sm font-semibold transition ${
+                    urlSourceMode === option.value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                  key={option.value}
+                  onClick={() => changeUrlSourceMode(option.value as UrlSourceMode)}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
-        {urlSourceMode === 'search' ? (
+        {isCommentSearchMode ? (
           <div className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -520,12 +563,103 @@ export function QueryPlanWorkspace() {
               </div>
             )}
           </div>
-        ) : (
+        ) : null}
+
+        {isCrawlSearchMode ? (
+          <section className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">模拟搜索 Query</h2>
+                <p className="mt-1 text-sm text-slate-500">人工提供最多 {MAX_APPROVED_QUERY_COUNT} 条搜索 Query，系统会模拟 Reddit 搜索并进入语料仅抓取。</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+                  有效 {validCrawlQueries.length} / 全部 {crawlQueries.length}
+                </span>
+                <button
+                  className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:text-slate-300"
+                  disabled={crawlQueries.length >= MAX_APPROVED_QUERY_COUNT}
+                  onClick={addCrawlQuery}
+                  type="button"
+                >
+                  <PlusIcon />
+                  新增
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-3">
+              {crawlQueries.map((item, index) => (
+                <article className="rounded-md border border-slate-200 p-3" key={item.id}>
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-500">#{index + 1}</span>
+                    <button
+                      aria-label="删除 Query"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition hover:bg-rose-50 hover:text-rose-600"
+                      onClick={() => removeCrawlQuery(item.id)}
+                      title="删除 Query"
+                      type="button"
+                    >
+                      <TrashIcon />
+                    </button>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_150px_120px]">
+                    <label className="block min-w-0">
+                      <span className="text-xs font-semibold text-slate-500">搜索 Query</span>
+                      <input
+                        className={`${inputClassName} mt-1`}
+                        onChange={(event) => updateCrawlQuery(item.id, 'query', event.target.value)}
+                        placeholder="例如：best AI video editor"
+                        value={item.query}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-500">时间范围</span>
+                      <select
+                        className={`${inputClassName} mt-1`}
+                        onChange={(event) =>
+                          updateCrawlQuery(item.id, 'suggestedTimeRange', event.target.value as SuggestedTimeRange)
+                        }
+                        value={item.suggestedTimeRange}
+                      >
+                        {TIME_RANGE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-500">优先级</span>
+                      <select
+                        className={`${inputClassName} mt-1`}
+                        onChange={(event) => updateCrawlQuery(item.id, 'priority', Number(event.target.value))}
+                        value={item.priority}
+                      >
+                        {[1, 2, 3, 4, 5].map((priority) => (
+                          <option key={priority} value={priority}>
+                            P{priority}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {isCommentManualMode || isCrawlManualMode ? (
           <section className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-slate-950">手动导入 Reddit URL</h2>
-                <p className="mt-1 text-sm text-slate-500">一行一个 Reddit 帖子 URL，系统会校验、去重，然后直接进入评论决策。</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {isCrawlManualMode
+                    ? '一行一个 Reddit 帖子 URL，系统会校验、去重，然后进入语料仅抓取。'
+                    : '一行一个 Reddit 帖子 URL，系统会校验、去重，然后直接进入评论决策。'}
+                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -551,7 +685,7 @@ export function QueryPlanWorkspace() {
                   type="button"
                 >
                   <CheckIcon />
-                  准备评论决策
+                  {isCrawlManualMode ? '准备仅抓取' : '准备评论决策'}
                 </button>
               </div>
             </div>
@@ -603,15 +737,15 @@ export function QueryPlanWorkspace() {
               </div>
             )}
 
-            {approvedPlan && searchResults.length > 0 && (
+            {searchResults.length > 0 && (
               <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
-                已准备 {searchResults.length} 条去重 URL，可以生成评论决策。
+                已准备 {searchResults.length} 条去重 URL，可以{isCrawlManualMode ? '开始语料仅抓取' : '生成评论决策'}。
               </div>
             )}
           </section>
-        )}
+        ) : null}
 
-        {urlSourceMode === 'search' && approvedPlan && (
+        {isCommentSearchMode && approvedPlan && (
           <section className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -748,7 +882,15 @@ export function QueryPlanWorkspace() {
           </section>
         )}
 
-        {approvedPlan && searchResults.length > 0 && (
+        {isCrawlSearchMode && validCrawlQueries.length > 0 ? (
+          <CrawlOnlyPanel key={`crawl-search-${validCrawlQueries.map((item) => item.query).join('|')}`} queries={validCrawlQueries} source="simulated_search" />
+        ) : null}
+
+        {isCrawlManualMode && searchResults.length > 0 ? (
+          <CrawlOnlyPanel key={`crawl-manual-${searchResults.map((item) => item.postUrl).join('|')}`} searchResults={searchResults} source="manual_urls" />
+        ) : null}
+
+        {(isCommentSearchMode || isCommentManualMode) && approvedPlan && searchResults.length > 0 && (
           <CommentDecisionPanel
             approvedPlan={approvedPlan}
             key={searchResults.map((item) => item.postUrl).join('|')}
@@ -756,13 +898,13 @@ export function QueryPlanWorkspace() {
           />
         )}
 
-        {urlSourceMode === 'search' && queries.length === 0 ? (
+        {isCommentSearchMode && queries.length === 0 ? (
           <div className="rounded-md border border-dashed border-slate-300 bg-white px-5 py-12 text-center text-sm font-medium text-slate-500">
             请输入产品上下文并生成 Query
           </div>
         ) : null}
 
-        {urlSourceMode === 'search' && queries.length > 0 ? (
+        {isCommentSearchMode && queries.length > 0 ? (
           <div className="grid min-w-0 gap-3">
             {queries.map((item, index) => (
               <article className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm" key={item.id}>

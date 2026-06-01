@@ -5,16 +5,19 @@ from collections.abc import Iterator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.comment_decision_runner import encode_ndjson as encode_comment_ndjson
 from app.comment_decision_runner import run_comment_decision_stream
+from app.crawl_only_runner import encode_ndjson as encode_crawl_only_ndjson
+from app.crawl_only_runner import resolve_crawl_only_artifact_path, run_crawl_only_stream
 from app.query_planner import generate_query_plan
 from app.reddit_analyzer import MAX_POSTS_PER_BATCH, stream_reddit_analysis
 from app.reddit_searcher import encode_ndjson, run_reddit_search_batch
 from app.schemas import (
     AnalyzeRequest,
     CommentDecisionRequest,
+    CrawlOnlyRequest,
     QueryPlanGenerateRequest,
     QueryPlanGenerateResponse,
     RedditSearchRequest,
@@ -24,6 +27,7 @@ from app.schemas import (
 MAX_CONCURRENT_ANALYSES = 3
 MAX_CONCURRENT_REDDIT_SEARCHES = 1
 MAX_CONCURRENT_COMMENT_DECISIONS = 1
+MAX_CONCURRENT_CRAWL_ONLY_TASKS = 1
 
 
 class AnalysisTaskLimiter:
@@ -47,6 +51,7 @@ class AnalysisTaskLimiter:
 task_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_ANALYSES)
 reddit_search_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_REDDIT_SEARCHES)
 comment_decision_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_COMMENT_DECISIONS)
+crawl_only_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_CRAWL_ONLY_TASKS)
 
 
 app = FastAPI(title="Reddit Insight Analyzer API")
@@ -165,6 +170,66 @@ async def stream_comment_decisions(payload: CommentDecisionRequest, request: Req
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/crawl-only/stream")
+async def stream_crawl_only(payload: CrawlOnlyRequest, request: Request) -> StreamingResponse:
+    if not crawl_only_limiter.try_acquire():
+        raise HTTPException(status_code=429, detail="当前已有仅抓取任务正在运行，ADSpower环境数量有限，请稍等十分钟再试")
+
+    async def stream_with_release():
+        stop_event = threading.Event()
+        producer_thread = None
+        try:
+            event_queue: queue.Queue[dict | None] = queue.Queue()
+            producer_thread = threading.Thread(
+                target=_produce_stream_events,
+                args=(run_crawl_only_stream(payload, stop_event=stop_event), event_queue),
+                daemon=True,
+            )
+            producer_thread.start()
+            while True:
+                if await request.is_disconnected():
+                    stop_event.set()
+                    return
+
+                event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
+                if event is _QUEUE_TIMEOUT:
+                    continue
+                if event is None:
+                    return
+                yield encode_crawl_only_ndjson(event)
+        except Exception as exc:
+            yield encode_crawl_only_ndjson({"type": "error", "message": f"仅抓取任务失败: {exc}"})
+        finally:
+            stop_event.set()
+            if producer_thread is not None and producer_thread.is_alive():
+                await _join_thread_until_done(producer_thread)
+            crawl_only_limiter.release()
+
+    return StreamingResponse(
+        stream_with_release(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/crawl-only/artifacts/{artifact_id}/markdown")
+def download_crawl_only_markdown(artifact_id: str) -> FileResponse:
+    try:
+        path = resolve_crawl_only_artifact_path(artifact_id, "markdown")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="artifact_not_found") from exc
+    return FileResponse(path, media_type="text/markdown; charset=utf-8", filename=path.name)
+
+
+@app.get("/api/crawl-only/artifacts/{artifact_id}/json")
+def download_crawl_only_json(artifact_id: str) -> FileResponse:
+    try:
+        path = resolve_crawl_only_artifact_path(artifact_id, "json")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="artifact_not_found") from exc
+    return FileResponse(path, media_type="application/json", filename=path.name)
 
 
 @app.post("/api/analyze/stream")
