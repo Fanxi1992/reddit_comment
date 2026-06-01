@@ -649,6 +649,7 @@ def run_reddit_search_batch(payload: RedditSearchRequest, stop_event: threading.
                         deduper=deduper,
                         query_index=next_query_index,
                         query=query_event["query"],
+                        target_count=int(query_event["targetUrlCount"]),
                         result=query_event["result"],
                     )
                     query_results.append(query_payload)
@@ -681,7 +682,7 @@ def _run_search_environment_worker(
     settings: AdsPowerSettings,
     environment_index: int,
     assignments: list[tuple[int, PlannedQuery]],
-    target_count: int,
+    fallback_target_count: int,
     event_queue: queue.Queue[dict[str, Any] | None],
     stop_event: threading.Event,
 ) -> None:
@@ -691,12 +692,14 @@ def _run_search_environment_worker(
             for query_index, query in assignments:
                 if stop_event.is_set():
                     break
+                target_count = _query_target_count(query, fallback_target_count)
                 event_queue.put(
                     {
                         "type": "query_started",
                         "queryIndex": query_index,
                         "query": query.query,
                         "timeRange": query.suggestedTimeRange,
+                        "targetUrlCount": target_count,
                         "environmentId": settings.env_id,
                         "environmentIndex": environment_index,
                     }
@@ -711,6 +714,7 @@ def _run_search_environment_worker(
                         "type": "_query_result_internal",
                         "queryIndex": query_index,
                         "query": query,
+                        "targetUrlCount": target_count,
                         "result": result,
                     }
                 )
@@ -718,12 +722,14 @@ def _run_search_environment_worker(
     except Exception as exc:
         if not stop_event.is_set():
             for query_index, query in assignments[processed_count:]:
+                target_count = _query_target_count(query, fallback_target_count)
                 event_queue.put(
                     {
                         "type": "query_started",
                         "queryIndex": query_index,
                         "query": query.query,
                         "timeRange": query.suggestedTimeRange,
+                        "targetUrlCount": target_count,
                         "environmentId": settings.env_id,
                         "environmentIndex": environment_index,
                     }
@@ -733,6 +739,7 @@ def _run_search_environment_worker(
                         "type": "_query_result_internal",
                         "queryIndex": query_index,
                         "query": query,
+                        "targetUrlCount": target_count,
                         "result": QuerySearchResult("failed", f"环境启动或执行失败: {exc}", "", [], 0),
                     }
                 )
@@ -745,6 +752,7 @@ def _build_query_result_payload(
     deduper: "SearchResultDeduper",
     query_index: int,
     query: PlannedQuery,
+    target_count: int,
     result: QuerySearchResult,
 ) -> dict[str, Any]:
     raw_items = [
@@ -757,6 +765,7 @@ def _build_query_result_payload(
         "type": "query_result",
         "queryIndex": query_index,
         "query": query.query,
+        "targetUrlCount": target_count,
         "status": result.status,
         "reason": result.reason,
         "searchResultsUrl": result.search_results_url,
@@ -764,6 +773,10 @@ def _build_query_result_payload(
         "uniqueResultCount": sum(1 for item in raw_items if not item.duplicateOfQuery),
         "results": [item.model_dump() for item in raw_items],
     }
+
+
+def _query_target_count(query: PlannedQuery, fallback_target_count: int) -> int:
+    return query.targetUrlCount or fallback_target_count
 
 
 def _load_search_env_concurrency() -> int:

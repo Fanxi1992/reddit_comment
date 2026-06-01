@@ -62,6 +62,7 @@ QueryIntent = Literal[
 
 SearchTimeRange = Literal["week", "month", "all"]
 SearchSort = Literal["relevance"]
+MAX_SEARCH_URL_BUDGET = 120
 
 
 class QueryPlanGenerateRequest(BaseModel):
@@ -81,6 +82,7 @@ class PlannedQuery(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500)
     priority: int = Field(..., ge=1, le=5)
     suggestedTimeRange: SearchTimeRange = "week"
+    targetUrlCount: int | None = Field(default=None, ge=1, le=MAX_SEARCH_URL_BUDGET)
 
 
 class QueryPlanGenerateResponse(BaseModel):
@@ -90,8 +92,13 @@ class QueryPlanGenerateResponse(BaseModel):
 class RedditSearchRequest(BaseModel):
     productContext: QueryPlanGenerateRequest
     queries: list[PlannedQuery] = Field(..., min_length=1, max_length=6)
-    perQueryLimit: int = Field(default=20, ge=1, le=50)
+    perQueryLimit: int = Field(default=20, ge=1, le=MAX_SEARCH_URL_BUDGET)
     searchSort: SearchSort = "relevance"
+
+    @model_validator(mode="after")
+    def validate_query_url_budget(self) -> "RedditSearchRequest":
+        _validate_query_url_budget(self.queries, self.perQueryLimit)
+        return self
 
 
 class RedditSearchResultItem(BaseModel):
@@ -173,12 +180,14 @@ class CrawlOnlyRequest(BaseModel):
     queries: list[PlannedQuery] | None = Field(default=None, max_length=6)
     urls: list[HttpUrl] | None = Field(default=None, max_length=120)
     maxCommentsPerPost: int = Field(default=30, ge=1, le=200)
-    perQueryLimit: int = Field(default=20, ge=1, le=20)
+    perQueryLimit: int = Field(default=20, ge=1, le=MAX_SEARCH_URL_BUDGET)
 
     @model_validator(mode="after")
     def validate_source_inputs(self) -> "CrawlOnlyRequest":
         if self.source == "simulated_search" and not self.queries:
             raise ValueError("模拟搜索（仅抓取）至少需要 1 条 query")
+        if self.source == "simulated_search":
+            _validate_query_url_budget(self.queries or [], self.perQueryLimit)
         if self.source == "manual_urls" and not self.urls:
             raise ValueError("手动导入 URL（仅抓取）至少需要 1 条 Reddit URL")
         return self
@@ -200,3 +209,9 @@ class CrawlOnlySummary(BaseModel):
     successCount: int
     skippedCount: int
     failedCount: int
+
+
+def _validate_query_url_budget(queries: list[PlannedQuery], fallback_limit: int) -> None:
+    total_budget = sum(query.targetUrlCount or fallback_limit for query in queries)
+    if total_budget > MAX_SEARCH_URL_BUDGET:
+        raise ValueError(f"Query URL 抓取数量总和不能超过 {MAX_SEARCH_URL_BUDGET}")

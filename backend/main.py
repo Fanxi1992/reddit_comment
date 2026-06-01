@@ -94,6 +94,7 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
                     "type": "search_started",
                     "totalQueries": len(payload.queries),
                     "perQueryLimit": payload.perQueryLimit,
+                    "totalTargetUrlCount": sum(query.targetUrlCount or payload.perQueryLimit for query in payload.queries),
                     "searchSort": payload.searchSort,
                 }
             )

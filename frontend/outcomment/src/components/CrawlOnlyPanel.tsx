@@ -37,14 +37,12 @@ const SOURCE_LABELS: Record<CrawlOnlySource, string> = {
   simulated_search: '模拟搜索（仅抓取）',
   manual_urls: '手动导入 URL（仅抓取）',
 }
-const MAX_CRAWL_ONLY_PER_QUERY_LIMIT = 20
 
 export function CrawlOnlyPanel({ source, queries = [], searchResults = [] }: CrawlOnlyPanelProps) {
   const [isRunning, setIsRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState('等待开始')
   const [maxCommentsPerPost, setMaxCommentsPerPost] = useState('30')
-  const [perQueryLimit, setPerQueryLimit] = useState('20')
   const [results, setResults] = useState<CrawlOnlyResult[]>([])
   const [postStates, setPostStates] = useState<Record<string, PostState>>({})
   const [environmentStates, setEnvironmentStates] = useState<Record<string, EnvironmentState>>({})
@@ -68,7 +66,6 @@ export function CrawlOnlyPanel({ source, queries = [], searchResults = [] }: Cra
     const payload: CrawlOnlyRequestPayload = {
       source,
       maxCommentsPerPost: clampNumber(maxCommentsPerPost, 1, 200, 30),
-      perQueryLimit: clampNumber(perQueryLimit, 1, MAX_CRAWL_ONLY_PER_QUERY_LIMIT, 20),
     }
     if (source === 'simulated_search') {
       payload.queries = queries
@@ -213,18 +210,6 @@ export function CrawlOnlyPanel({ source, queries = [], searchResults = [] }: Cra
             type="number"
             value={maxCommentsPerPost}
           />
-          {source === 'simulated_search' ? (
-            <input
-              className="h-9 w-28 rounded-md border border-slate-300 px-2 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-100"
-              disabled={isRunning}
-              max={MAX_CRAWL_ONLY_PER_QUERY_LIMIT}
-              min={1}
-              onChange={(event) => setPerQueryLimit(event.target.value)}
-              title="每条 Query 抓取 URL 数"
-              type="number"
-              value={perQueryLimit}
-            />
-          ) : null}
           {isRunning ? (
             <button
               className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-rose-300 hover:text-rose-700"

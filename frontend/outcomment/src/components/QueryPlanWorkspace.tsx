@@ -38,7 +38,8 @@ const DEFAULT_CONTEXT: ProductContext = {
 
 const MAX_CANDIDATE_QUERY_COUNT = 20
 const MAX_APPROVED_QUERY_COUNT = 6
-const MAX_CRAWL_ONLY_URL_COUNT = 120
+const MAX_QUERY_URL_BUDGET = 120
+const MAX_CRAWL_ONLY_URL_COUNT = MAX_QUERY_URL_BUDGET
 
 const INTENT_OPTIONS: Array<{ value: QueryIntent; label: string }> = [
   { value: 'pain_point', label: '痛点' },
@@ -71,7 +72,9 @@ export function QueryPlanWorkspace() {
   const [urlSourceMode, setUrlSourceMode] = useState<UrlSourceMode>('search')
   const [context, setContext] = useState<ProductContext>(DEFAULT_CONTEXT)
   const [queries, setQueries] = useState<PlannedQuery[]>([])
-  const [crawlQueries, setCrawlQueries] = useState<PlannedQuery[]>([createPlannedQuery(EMPTY_QUERY)])
+  const [crawlQueries, setCrawlQueries] = useState<PlannedQuery[]>(
+    assignDefaultTargetUrlCounts([createPlannedQuery(EMPTY_QUERY)]),
+  )
   const [approvedPlan, setApprovedPlan] = useState<ApprovedQueryPlan | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -98,11 +101,21 @@ export function QueryPlanWorkspace() {
           reason: item.reason.trim() || 'Manual simulated search query',
         }))
         .filter((item) => item.query)
+        .map((item) => normalizeQueryTargetUrlCount(item))
         .slice(0, MAX_APPROVED_QUERY_COUNT),
     [crawlQueries],
   )
+  const queryBudget = useMemo(
+    () => calculateQueryBudget(queries.filter((item) => item.query.trim() && item.reason.trim())),
+    [queries],
+  )
+  const crawlQueryBudget = useMemo(() => calculateQueryBudget(validCrawlQueries), [validCrawlQueries])
   const canGenerate = context.productName.trim() && context.productDescription.trim() && !isGenerating
-  const canApprove = validQueryCount > 0 && validQueryCount <= MAX_APPROVED_QUERY_COUNT && !isGenerating
+  const canApprove =
+    validQueryCount > 0 &&
+    validQueryCount <= MAX_APPROVED_QUERY_COUNT &&
+    queryBudget.total <= MAX_QUERY_URL_BUDGET &&
+    !isGenerating
   const canStartSearch = Boolean(approvedPlan?.queries.length) && !isGenerating && !isSearching
   const manualUrlPreview = useMemo(() => parseManualRedditUrls(manualUrlsText), [manualUrlsText])
   const isCommentSearchMode = urlSourceMode === 'search'
@@ -153,7 +166,7 @@ export function QueryPlanWorkspace() {
         productName: context.productName.trim(),
         productDescription: context.productDescription.trim(),
       })
-      setQueries(response.queries.map(createPlannedQuery))
+      setQueries(assignDefaultTargetUrlCounts(response.queries.map(createPlannedQuery)))
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : '生成 Query 失败')
     } finally {
@@ -168,13 +181,13 @@ export function QueryPlanWorkspace() {
   }
 
   const addQuery = () => {
-    setQueries((current) => [...current, createPlannedQuery(EMPTY_QUERY)])
+    setQueries((current) => assignDefaultTargetUrlCounts([...current, createPlannedQuery(EMPTY_QUERY)]))
     setApprovedPlan(null)
     resetSearchState()
   }
 
   const removeQuery = (id: string) => {
-    setQueries((current) => current.filter((item) => item.id !== id))
+    setQueries((current) => assignDefaultTargetUrlCounts(current.filter((item) => item.id !== id)))
     setApprovedPlan(null)
     resetSearchState()
   }
@@ -186,7 +199,9 @@ export function QueryPlanWorkspace() {
 
   const addCrawlQuery = () => {
     setCrawlQueries((current) =>
-      current.length >= MAX_APPROVED_QUERY_COUNT ? current : [...current, createPlannedQuery(EMPTY_QUERY)],
+      current.length >= MAX_APPROVED_QUERY_COUNT
+        ? current
+        : assignDefaultTargetUrlCounts([...current, createPlannedQuery(EMPTY_QUERY)]),
     )
     resetSearchState()
   }
@@ -194,7 +209,7 @@ export function QueryPlanWorkspace() {
   const removeCrawlQuery = (id: string) => {
     setCrawlQueries((current) => {
       const next = current.filter((item) => item.id !== id)
-      return next.length ? next : [createPlannedQuery(EMPTY_QUERY)]
+      return assignDefaultTargetUrlCounts(next.length ? next : [createPlannedQuery(EMPTY_QUERY)])
     })
     resetSearchState()
   }
@@ -207,6 +222,7 @@ export function QueryPlanWorkspace() {
         reason: item.reason.trim(),
       }))
       .filter((item) => item.query && item.reason)
+      .map((item) => normalizeQueryTargetUrlCount(item))
       .sort((left, right) => left.priority - right.priority || left.query.localeCompare(right.query))
 
     if (!approvedQueries.length) {
@@ -216,6 +232,11 @@ export function QueryPlanWorkspace() {
 
     if (approvedQueries.length > MAX_APPROVED_QUERY_COUNT) {
       setError(`最多只能批准 ${MAX_APPROVED_QUERY_COUNT} 条 Query 进入 Reddit 搜索，请删除或清空多余候选项。`)
+      return
+    }
+    const approvedBudget = calculateQueryBudget(approvedQueries)
+    if (approvedBudget.total > MAX_QUERY_URL_BUDGET) {
+      setError(`当前 Query URL 数总和为 ${approvedBudget.total}，不能超过 ${MAX_QUERY_URL_BUDGET}。请调低某些 Query 的 URL 数。`)
       return
     }
 
@@ -556,6 +577,18 @@ export function QueryPlanWorkspace() {
               </div>
             )}
 
+            {validQueryCount > 0 ? (
+              <div
+                className={`mt-3 rounded-md border px-3 py-2 text-sm font-semibold ${
+                  queryBudget.total > MAX_QUERY_URL_BUDGET
+                    ? 'border-rose-200 bg-rose-50 text-rose-700'
+                    : 'border-rose-100 bg-rose-50 text-rose-600'
+                }`}
+              >
+                Query URL 预算：{queryBudget.total} / {MAX_QUERY_URL_BUDGET}。每条 Query 可单独调整，合计不能超过 {MAX_QUERY_URL_BUDGET}。
+              </div>
+            ) : null}
+
             {error && (
               <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
                 {error}
@@ -576,6 +609,15 @@ export function QueryPlanWorkspace() {
               <div>
                 <h2 className="text-base font-semibold text-slate-950">模拟搜索 Query</h2>
                 <p className="mt-1 text-sm text-slate-500">人工提供最多 {MAX_APPROVED_QUERY_COUNT} 条搜索 Query，系统会模拟 Reddit 搜索并进入语料仅抓取。</p>
+                {validCrawlQueries.length > 0 ? (
+                  <p
+                    className={`mt-1 text-sm font-semibold ${
+                      crawlQueryBudget.total > MAX_QUERY_URL_BUDGET ? 'text-rose-700' : 'text-rose-600'
+                    }`}
+                  >
+                    Query URL 预算：{crawlQueryBudget.total} / {MAX_QUERY_URL_BUDGET}。每条 Query 可单独调整，合计不能超过 {MAX_QUERY_URL_BUDGET}。
+                  </p>
+                ) : null}
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
@@ -593,6 +635,12 @@ export function QueryPlanWorkspace() {
               </div>
             </div>
 
+            {crawlQueryBudget.total > MAX_QUERY_URL_BUDGET ? (
+              <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+                当前 Query URL 数总和为 {crawlQueryBudget.total}，不能超过 {MAX_QUERY_URL_BUDGET}。请调低某些 Query 的 URL 数。
+              </div>
+            ) : null}
+
             <div className="mt-3 grid gap-3">
               {crawlQueries.map((item, index) => (
                 <article className="rounded-md border border-slate-200 p-3" key={item.id}>
@@ -608,7 +656,7 @@ export function QueryPlanWorkspace() {
                       <TrashIcon />
                     </button>
                   </div>
-                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_150px_120px]">
+                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_150px_120px_120px]">
                     <label className="block min-w-0">
                       <span className="text-xs font-semibold text-slate-500">搜索 Query</span>
                       <input
@@ -633,6 +681,19 @@ export function QueryPlanWorkspace() {
                           </option>
                         ))}
                       </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-500">URL 数</span>
+                      <input
+                        className={`${inputClassName} mt-1`}
+                        max={MAX_QUERY_URL_BUDGET}
+                        min={1}
+                        onChange={(event) =>
+                          updateCrawlQuery(item.id, 'targetUrlCount', clampTargetUrlCount(Number(event.target.value)))
+                        }
+                        type="number"
+                        value={item.targetUrlCount ?? defaultTargetUrlCount(crawlQueries.length)}
+                      />
                     </label>
                     <label className="block">
                       <span className="text-xs font-semibold text-slate-500">优先级</span>
@@ -896,7 +957,7 @@ export function QueryPlanWorkspace() {
           </section>
         )}
 
-        {isCrawlSearchMode && validCrawlQueries.length > 0 ? (
+        {isCrawlSearchMode && validCrawlQueries.length > 0 && crawlQueryBudget.total <= MAX_QUERY_URL_BUDGET ? (
           <CrawlOnlyPanel key={`crawl-search-${validCrawlQueries.map((item) => item.query).join('|')}`} queries={validCrawlQueries} source="simulated_search" />
         ) : null}
 
@@ -935,7 +996,7 @@ export function QueryPlanWorkspace() {
                   </button>
                 </div>
 
-                <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_180px_150px_120px]">
+                <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_180px_150px_120px_120px]">
                   <label className="block min-w-0">
                     <span className="text-xs font-semibold text-slate-500">搜索 Query</span>
                     <input
@@ -975,6 +1036,20 @@ export function QueryPlanWorkspace() {
                         </option>
                       ))}
                     </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-500">URL 数</span>
+                    <input
+                      className={`${inputClassName} mt-1`}
+                      max={MAX_QUERY_URL_BUDGET}
+                      min={1}
+                      onChange={(event) =>
+                        updateQuery(item.id, 'targetUrlCount', clampTargetUrlCount(Number(event.target.value)))
+                      }
+                      type="number"
+                      value={item.targetUrlCount ?? defaultTargetUrlCount(queries.length)}
+                    />
                   </label>
 
                   <label className="block">
@@ -1178,6 +1253,40 @@ function createPlannedQuery(payload: PlannedQueryPayload): PlannedQuery {
     id: createId(),
     ...payload,
   }
+}
+
+function assignDefaultTargetUrlCounts(queries: PlannedQuery[]): PlannedQuery[] {
+  const targetUrlCount = defaultTargetUrlCount(queries.length)
+  return queries.map((query) => ({
+    ...query,
+    targetUrlCount,
+  }))
+}
+
+function calculateQueryBudget(queries: PlannedQuery[]): { total: number; defaultTargetUrlCount: number } {
+  const fallback = defaultTargetUrlCount(queries.length)
+  return {
+    total: queries.reduce((sum, query) => sum + clampTargetUrlCount(query.targetUrlCount ?? fallback), 0),
+    defaultTargetUrlCount: fallback,
+  }
+}
+
+function normalizeQueryTargetUrlCount(query: PlannedQuery): PlannedQuery {
+  return {
+    ...query,
+    targetUrlCount: clampTargetUrlCount(query.targetUrlCount ?? defaultTargetUrlCount(1)),
+  }
+}
+
+function defaultTargetUrlCount(queryCount: number): number {
+  return queryCount > 0 ? Math.floor(MAX_QUERY_URL_BUDGET / queryCount) : MAX_QUERY_URL_BUDGET
+}
+
+function clampTargetUrlCount(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1
+  }
+  return Math.min(MAX_QUERY_URL_BUDGET, Math.max(1, Math.trunc(value)))
 }
 
 function createId(): string {

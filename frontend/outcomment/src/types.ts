@@ -114,6 +114,7 @@ export type PlannedQuery = {
   reason: string
   priority: number
   suggestedTimeRange: SuggestedTimeRange
+  targetUrlCount?: number | null
 }
 
 export type PlannedQueryPayload = Omit<PlannedQuery, 'id'>
@@ -167,6 +168,7 @@ export type RedditSearchStreamEvent =
       type: 'search_started'
       totalQueries: number
       perQueryLimit: number
+      totalTargetUrlCount?: number
       searchSort: 'relevance'
     }
   | {
@@ -174,11 +176,13 @@ export type RedditSearchStreamEvent =
       queryIndex: number
       query: string
       timeRange: SuggestedTimeRange
+      targetUrlCount?: number
     }
   | {
       type: 'query_result'
       queryIndex: number
       query: string
+      targetUrlCount?: number
       status: Exclude<RedditSearchStatus, 'pending' | 'running'>
       reason: string
       searchResultsUrl: string
@@ -377,6 +381,7 @@ export type CrawlOnlyStreamEvent =
       type: 'search_started'
       totalQueries: number
       perQueryLimit: number
+      totalTargetUrlCount?: number
       searchSort: 'relevance'
     }
   | {
@@ -384,6 +389,7 @@ export type CrawlOnlyStreamEvent =
       queryIndex: number
       query: string
       timeRange: SuggestedTimeRange
+      targetUrlCount?: number
       environmentId?: string
       environmentIndex?: number
     }
@@ -391,6 +397,7 @@ export type CrawlOnlyStreamEvent =
       type: 'query_result'
       queryIndex: number
       query: string
+      targetUrlCount?: number
       status: Exclude<RedditSearchStatus, 'pending' | 'running'>
       reason: string
       searchResultsUrl: string

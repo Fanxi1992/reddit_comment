@@ -46,6 +46,7 @@ def run_crawl_only_stream(payload: CrawlOnlyRequest, stop_event: threading.Event
             "type": "search_started",
             "totalQueries": len(payload.queries or []),
             "perQueryLimit": payload.perQueryLimit,
+            "totalTargetUrlCount": sum(query.targetUrlCount or payload.perQueryLimit for query in payload.queries or []),
             "searchSort": "relevance",
         }
         search_results, search_metadata = yield from _run_simulated_search(payload, stop_event)
