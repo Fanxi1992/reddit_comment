@@ -89,7 +89,7 @@ export function QueryPlanWorkspace() {
   const manualUrlFileInputRef = useRef<HTMLInputElement | null>(null)
 
   const validQueryCount = useMemo(
-    () => queries.filter((item) => item.query.trim() && item.reason.trim()).length,
+    () => queries.filter((item) => item.query.trim()).length,
     [queries],
   )
   const validCrawlQueries = useMemo(
@@ -106,7 +106,7 @@ export function QueryPlanWorkspace() {
     [crawlQueries],
   )
   const queryBudget = useMemo(
-    () => calculateQueryBudget(queries.filter((item) => item.query.trim() && item.reason.trim())),
+    () => calculateQueryBudget(queries.filter((item) => item.query.trim())),
     [queries],
   )
   const crawlQueryBudget = useMemo(() => calculateQueryBudget(validCrawlQueries), [validCrawlQueries])
@@ -219,9 +219,9 @@ export function QueryPlanWorkspace() {
       .map((item) => ({
         ...item,
         query: item.query.trim(),
-        reason: item.reason.trim(),
+        reason: item.reason.trim() || 'Manual edited search query',
       }))
-      .filter((item) => item.query && item.reason)
+      .filter((item) => item.query)
       .map((item) => normalizeQueryTargetUrlCount(item))
       .sort((left, right) => left.priority - right.priority || left.query.localeCompare(right.query))
 
