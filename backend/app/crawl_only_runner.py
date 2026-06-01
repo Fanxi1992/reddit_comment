@@ -26,6 +26,7 @@ from app.schemas import (
 
 
 OUTPUT_ROOT = Path(__file__).resolve().parents[1] / "data" / "crawl_outputs"
+MAX_CRAWL_ONLY_POSTS = 120
 
 
 def run_crawl_only_stream(payload: CrawlOnlyRequest, stop_event: threading.Event | None = None) -> Iterator[dict[str, Any]]:
@@ -60,20 +61,24 @@ def run_crawl_only_stream(payload: CrawlOnlyRequest, stop_event: threading.Event
             },
             "results": [item.model_dump() for item in search_results],
         }
-        yield {"type": "search_completed", **search_metadata}
 
     if stop_event.is_set():
-        return
-    if not search_results:
-        yield {"type": "error", "message": "没有可抓取的去重 Reddit URL"}
         return
 
     deduped_results = _dedupe_search_results(search_results)
-    detail_results = yield from _run_detail_crawl(payload, deduped_results, search_metadata, stop_event)
+    limited_results = deduped_results[:MAX_CRAWL_ONLY_POSTS]
+    search_metadata = _build_locked_search_metadata(search_metadata, limited_results, len(deduped_results))
+    yield {"type": "search_completed", **search_metadata}
+
+    if not limited_results:
+        yield {"type": "error", "message": "没有可抓取的去重 Reddit URL"}
+        return
+
+    detail_results = yield from _run_detail_crawl(payload, limited_results, search_metadata, stop_event)
     if stop_event.is_set():
         return
 
-    summary = _build_summary(len(deduped_results), detail_results)
+    summary = _build_summary(len(limited_results), detail_results)
     artifact_id, json_path, markdown_path = write_crawl_only_artifacts(
         payload=payload,
         search_metadata=search_metadata,
@@ -120,7 +125,6 @@ def _run_simulated_search(
                 "summary": event.get("summary") or {},
                 "results": raw_results,
             }
-            yield {"type": "search_completed", **metadata}
             break
 
     return final_results, metadata
@@ -162,6 +166,7 @@ def _run_detail_crawl(
 
     completed_workers = 0
     detail_results: list[dict[str, Any]] = []
+    completed_normally = False
     try:
         while completed_workers < len(threads):
             event = event_queue.get()
@@ -171,8 +176,10 @@ def _run_detail_crawl(
             if event.get("type") == "post_result":
                 detail_results.append(event.get("result") or {})
             yield event
+        completed_normally = True
     finally:
-        stop_event.set()
+        if not completed_normally:
+            stop_event.set()
         for thread in threads:
             thread.join()
 
@@ -403,6 +410,23 @@ def _dedupe_search_results(items: list[RedditSearchResultItem]) -> list[RedditSe
         item.resultIndex = len(output) + 1
         output.append(item)
     return output
+
+
+def _build_locked_search_metadata(
+    search_metadata: dict[str, Any],
+    results: list[RedditSearchResultItem],
+    unique_before_limit: int,
+) -> dict[str, Any]:
+    summary = dict(search_metadata.get("summary") or {})
+    summary["uniqueUrlCount"] = len(results)
+    summary["lockedUrlCount"] = len(results)
+    summary["eligibleUniqueUrlCount"] = unique_before_limit
+    summary["droppedByLimitCount"] = max(0, unique_before_limit - len(results))
+    return {
+        **search_metadata,
+        "summary": summary,
+        "results": [item.model_dump() for item in results],
+    }
 
 
 def _build_failed_result(item: RedditSearchResultItem, reason: str, environment_id: str | None) -> dict[str, Any]:

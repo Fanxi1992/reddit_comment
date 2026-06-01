@@ -37,6 +37,7 @@ const SOURCE_LABELS: Record<CrawlOnlySource, string> = {
   simulated_search: '模拟搜索（仅抓取）',
   manual_urls: '手动导入 URL（仅抓取）',
 }
+const MAX_CRAWL_ONLY_PER_QUERY_LIMIT = 20
 
 export function CrawlOnlyPanel({ source, queries = [], searchResults = [] }: CrawlOnlyPanelProps) {
   const [isRunning, setIsRunning] = useState(false)
@@ -67,7 +68,7 @@ export function CrawlOnlyPanel({ source, queries = [], searchResults = [] }: Cra
     const payload: CrawlOnlyRequestPayload = {
       source,
       maxCommentsPerPost: clampNumber(maxCommentsPerPost, 1, 200, 30),
-      perQueryLimit: clampNumber(perQueryLimit, 1, 50, 20),
+      perQueryLimit: clampNumber(perQueryLimit, 1, MAX_CRAWL_ONLY_PER_QUERY_LIMIT, 20),
     }
     if (source === 'simulated_search') {
       payload.queries = queries
@@ -216,7 +217,7 @@ export function CrawlOnlyPanel({ source, queries = [], searchResults = [] }: Cra
             <input
               className="h-9 w-28 rounded-md border border-slate-300 px-2 text-sm outline-none transition focus:border-teal-500 focus:ring-4 focus:ring-teal-100"
               disabled={isRunning}
-              max={50}
+              max={MAX_CRAWL_ONLY_PER_QUERY_LIMIT}
               min={1}
               onChange={(event) => setPerQueryLimit(event.target.value)}
               title="每条 Query 抓取 URL 数"

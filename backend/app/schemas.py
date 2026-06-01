@@ -171,9 +171,9 @@ CrawlOnlyStatus = Literal["success", "skipped", "failed"]
 class CrawlOnlyRequest(BaseModel):
     source: CrawlOnlySource
     queries: list[PlannedQuery] | None = Field(default=None, max_length=6)
-    urls: list[HttpUrl] | None = Field(default=None, max_length=500)
+    urls: list[HttpUrl] | None = Field(default=None, max_length=120)
     maxCommentsPerPost: int = Field(default=30, ge=1, le=200)
-    perQueryLimit: int = Field(default=20, ge=1, le=50)
+    perQueryLimit: int = Field(default=20, ge=1, le=20)
 
     @model_validator(mode="after")
     def validate_source_inputs(self) -> "CrawlOnlyRequest":

@@ -38,6 +38,7 @@ const DEFAULT_CONTEXT: ProductContext = {
 
 const MAX_CANDIDATE_QUERY_COUNT = 20
 const MAX_APPROVED_QUERY_COUNT = 6
+const MAX_CRAWL_ONLY_URL_COUNT = 120
 
 const INTENT_OPTIONS: Array<{ value: QueryIntent; label: string }> = [
   { value: 'pain_point', label: '痛点' },
@@ -280,6 +281,10 @@ export function QueryPlanWorkspace() {
     }
     if (!manualUrlPreview.valid.length) {
       setManualUrlError('请粘贴至少一个有效的 Reddit 帖子 URL。')
+      return
+    }
+    if (isCrawlManualMode && manualUrlPreview.valid.length > MAX_CRAWL_ONLY_URL_COUNT) {
+      setManualUrlError(`仅抓取模式最多支持 ${MAX_CRAWL_ONLY_URL_COUNT} 条有效去重 URL，请删减后再开始。`)
       return
     }
 
@@ -680,7 +685,7 @@ export function QueryPlanWorkspace() {
                 </button>
                 <button
                   className="inline-flex h-9 items-center gap-1 rounded-md bg-teal-600 px-3 text-sm font-semibold text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  disabled={!manualUrlPreview.valid.length}
+                  disabled={!manualUrlPreview.valid.length || (isCrawlManualMode && manualUrlPreview.valid.length > MAX_CRAWL_ONLY_URL_COUNT)}
                   onClick={prepareManualUrls}
                   type="button"
                 >
@@ -716,6 +721,12 @@ export function QueryPlanWorkspace() {
               <Metric label="有效去重 URL" value={manualUrlPreview.valid.length} />
               <Metric label="无效/重复" value={manualUrlPreview.invalid.length + manualUrlPreview.duplicateCount} />
             </div>
+
+            {isCrawlManualMode && manualUrlPreview.valid.length > MAX_CRAWL_ONLY_URL_COUNT ? (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
+                当前有效去重 URL 为 {manualUrlPreview.valid.length} 条，仅抓取模式最多支持 {MAX_CRAWL_ONLY_URL_COUNT} 条。
+              </div>
+            ) : null}
 
             {manualUrlError && (
               <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
