@@ -668,12 +668,12 @@ def run_reddit_search_batch(payload: RedditSearchRequest, stop_event: threading.
             "summary": summary.model_dump(),
             "results": [item.model_dump() for item in deduper.sorted_results()],
         }
+        completed_normally = True
         yield {
             "type": "done",
             "summary": summary.model_dump(),
             "results": [item.model_dump() for item in deduper.sorted_results()],
         }
-        completed_normally = True
     finally:
         if not completed_normally:
             stop_event.set()
