@@ -145,46 +145,72 @@ class PostDetailObservationCollector:
                 const authorEl = first(post, ["a[href^='/user/']", "a[href*='/user/']"]);
                 const outboundEl = first(post, ["a[slot='outbound-link']", "a[href^='http']:not([href*='reddit.com'])"]);
                 const mediaContainer = first(post, ["[slot='post-media-container']"]);
+                const contentHref = normalizeUrl(attr(post, "content-href")).replace(/&amp;/g, "&");
+                const domain = attr(post, "domain").toLowerCase();
+                const hasRedditImageHref = /^https?:\/\/(?:i|preview)\.redd\.it\//i.test(contentHref);
+                const hasRedditVideoHref = /^https?:\/\/v\.redd\.it\//i.test(contentHref);
+                const hasGallery = Boolean(post.querySelector("gallery-carousel, shreddit-gallery-carousel"));
+                const hasVideo = Boolean(post.querySelector("shreddit-player, video, source[src]"));
+                const hasPostImage = Boolean(
+                    (mediaContainer || post).querySelector(
+                        "img#post-image[src], img.preview-img[src], .lightboxed-content img[src], zoomable-img img[src]"
+                    )
+                );
 
-                let postType = attr(post, "post-type") || "unknown";
-                if (postType === "unknown" && post.querySelector("shreddit-player, video")) postType = "video";
-                else if (postType === "unknown" && post.querySelector("gallery-carousel, shreddit-gallery-carousel")) postType = "gallery";
-                else if (postType === "unknown" && post.querySelector("img.media-lightbox-img, img[alt]")) postType = "image";
-                else if (outboundEl) postType = "link";
-                else if (bodyEl) postType = "text";
+                let postType = (attr(post, "post-type") || "unknown").toLowerCase();
+                if (postType === "unknown" && hasGallery) postType = "gallery";
+                else if (postType === "unknown" && (hasVideo || hasRedditVideoHref)) postType = "video";
+                else if (postType === "unknown" && (hasRedditImageHref || hasPostImage || domain === "i.redd.it")) postType = "image";
+                else if (postType === "unknown" && outboundEl) postType = "link";
+                else if (postType === "unknown" && bodyEl) postType = "text";
 
                 const collectMediaUrls = () => {
-                    const urls = [];
+                    const originalUrls = [];
+                    const fallbackUrls = [];
                     const seen = new Set();
-                    const push = (value) => {
-                        const normalized = normalizeUrl(value);
-                        if (!normalized || seen.has(normalized)) return;
-                        seen.add(normalized);
-                        urls.push(normalized);
+                    const mediaKey = (value) => {
+                        const normalized = normalizeUrl(value).replace(/&amp;/g, "&");
+                        if (!normalized) return "";
+                        try {
+                            const parsed = new URL(normalized);
+                            const host = parsed.hostname.toLowerCase();
+                            if (host !== "i.redd.it" && host !== "preview.redd.it") return "";
+                            const fileName = decodeURIComponent((parsed.pathname.split("/").pop() || "").toLowerCase());
+                            const stem = fileName.replace(/\.[a-z0-9]+$/i, "");
+                            if (host === "i.redd.it") return stem;
+                            const previewMatch = stem.match(/(?:^|-)v\d+-([a-z0-9]+)$/i);
+                            return previewMatch ? previewMatch[1].toLowerCase() : stem;
+                        } catch {
+                            return "";
+                        }
                     };
-                    const collectFrom = (root, selectors) => {
+                    const push = (value, bucket = originalUrls) => {
+                        const normalized = normalizeUrl(value);
+                        const cleaned = normalized.replace(/&amp;/g, "&");
+                        if (!cleaned) return;
+                        const dedupeKey = mediaKey(cleaned) || cleaned;
+                        if (seen.has(dedupeKey)) return;
+                        seen.add(dedupeKey);
+                        bucket.push(cleaned);
+                    };
+                    const collectFrom = (root, selectors, bucket = originalUrls) => {
                         if (!root) return;
                         for (const selector of selectors) {
                             for (const el of root.querySelectorAll(selector)) {
-                                push(el.currentSrc || el.src || attr(el, "src"));
+                                push(el.currentSrc || el.src || attr(el, "src"), bucket);
                             }
                         }
                     };
-                    const contentHref = normalizeUrl(attr(post, "content-href"));
-                    if (postType === "text" || postType === "link") return urls;
-                    if (postType === "image" || postType === "gallery") {
-                        if (/^https?:\/\/i\.redd\.it\//i.test(contentHref)) push(contentHref);
-                        collectFrom(post, ["zoomable-img img[src]", ".lightboxed-content img[src]"]);
-                        if (!urls.length) collectFrom(mediaContainer || post, ["img#post-image[src]", "img.preview-img[src]"]);
-                        return urls;
-                    }
+                    if (/^https?:\/\/i\.redd\.it\//i.test(contentHref)) push(contentHref, originalUrls);
+                    collectFrom(mediaContainer || post, ["zoomable-img img[src]", ".lightboxed-content img[src]"], originalUrls);
+                    if (/^https?:\/\/preview\.redd\.it\//i.test(contentHref)) push(contentHref, fallbackUrls);
+                    collectFrom(mediaContainer || post, ["img#post-image[src]", "img.preview-img[src]"], fallbackUrls);
                     if (postType === "gif" || postType === "video") {
                         const player = first(mediaContainer || post, ["shreddit-player[src]", "video[src]"]);
-                        if (player) push(player.currentSrc || attr(player, "src"));
-                        if (!urls.length) collectFrom(mediaContainer || post, ["source[src]"]);
-                        return urls;
+                        if (player) push(player.currentSrc || attr(player, "src"), originalUrls);
+                        collectFrom(mediaContainer || post, ["source[src]"], originalUrls);
                     }
-                    return urls;
+                    return originalUrls.concat(fallbackUrls);
                 };
 
                 return {

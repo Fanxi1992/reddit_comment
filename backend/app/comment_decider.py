@@ -1,24 +1,23 @@
+import base64
 import json
-import os
 import re
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
-from app.reddit_analyzer import download_image_bytes
+from app.image_utils import download_image_bytes
+from app.openrouter_client import chat_json_with_images, get_openrouter_comment_model
 from app.schemas import QueryPlanGenerateRequest, RedditSearchResultItem
 
 
-MODEL_NAME = "gemini-3.5-flash"
-GEMINI_TIMEOUT_SECONDS = 2 * 60
+OPENROUTER_TIMEOUT_SECONDS = 2 * 60
 MAX_BODY_CHARS = 5000
 MAX_COMMENT_TEXT_CHARS = 900
 MAX_COMMENTS_FOR_PROMPT = 30
-MAX_IMAGES_FOR_GEMINI = 3
+MAX_IMAGES_FOR_OPENROUTER = 3
 MAX_TARGET_COMMENT_PREVIEW_CHARS = 300
+SUPPORTED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
 load_dotenv()
 
@@ -55,38 +54,26 @@ def generate_comment_decision(
     detail: dict[str, Any],
     comment_length_style: str = "medium",
 ) -> dict[str, Any]:
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise CommentDecisionError("缺少环境变量 GEMINI_API_KEY")
-
     allowed_targets = _build_allowed_targets(search_result.postUrl, detail)
     if not allowed_targets:
         return _skipped("没有可用的评论目标 URL")
 
-    if _should_skip_before_gemini(detail):
+    if _should_skip_before_model(detail):
         return _skipped("帖子正文和首屏评论都不足，已跳过")
 
-    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_SECONDS * 1000))
-    contents: list[Any] = [_build_prompt(product_context, search_result, detail, allowed_targets, comment_length_style)]
-    contents.extend(_build_image_parts(detail))
-
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=contents,
-        config={
-            "response_mime_type": "application/json",
-            "response_json_schema": COMMENT_DECISION_SCHEMA,
-        },
+    raw_decision = chat_json_with_images(
+        model=get_openrouter_comment_model(),
+        prompt=_build_prompt(product_context, search_result, detail, allowed_targets, comment_length_style),
+        image_data_urls=_build_image_data_urls(detail),
+        schema_name="comment_decision",
+        schema=COMMENT_DECISION_SCHEMA,
+        timeout_seconds=OPENROUTER_TIMEOUT_SECONDS,
     )
-    if not response.text:
-        raise CommentDecisionError("Gemini 未返回评论决策")
 
     try:
-        raw_decision = json.loads(response.text)
+        return _validate_decision(raw_decision, allowed_targets)
     except Exception as exc:
-        raise CommentDecisionError(f"Gemini 返回格式无法解析: {exc}") from exc
-
-    return _validate_decision(raw_decision, allowed_targets)
+        raise CommentDecisionError(f"OpenRouter 评论决策格式无法解析: {exc}") from exc
 
 
 def _build_prompt(
@@ -98,19 +85,19 @@ def _build_prompt(
 ) -> str:
     payload = {
         "task": (
-            "Decide whether this Reddit post is a good organic word-of-mouth comment opportunity. "
-            "If yes, choose exactly one target URL and write one natural English Reddit comment."
+            "Analyze the post and its comment section to match the community's tone (humor, sarcasm, slang, or deep-dive sharing). "
+            "Decide if you can drop a useful, witty, or casual comment that naturally drops the product as a recommendation, alternative, or cool discovery. "
+            "If yes, pick exactly one target URL and write a highly authentic, Reddit-native comment that sounds like a real person shooting the breeze."
         ),
-        "hard_rules": [
+"hard_rules": [
             "Return JSON only following the schema.",
-            "Default to finding a useful, natural Reddit-native angle when there is any reasonable connection to the product context.",
-            "Only set shouldComment=false when the post is clearly irrelevant, unsafe, spam-sensitive, or there is no meaningful context to respond to.",
+            "Default to finding a natural angle if there's any hook. Only set shouldComment=false if the post is dead irrelevant, hostile, or pure spam.",
             "commentUrl must exactly match one URL from allowed_comment_targets.",
-            "Use the post URL for a top-level comment, or a comment URL when replying to an existing comment.",
-            "Write like a real Reddit user, not an ad.",
-            "Do not overpromise, do not fabricate personal experience, and do not claim you used the product unless the user explicitly allowed that.",
-            "Prefer recommendation requests, alternatives, comparisons, pain points, and problem-solution discussions.",
-            "If replying to a comment, the text must directly fit that comment's context.",
+            "CRITICAL: Match the vibe of the existing comments. If the sub is full of cynical humor, be cynical/funny. If it's a tech sub, blend a casual joke with a quick piece of value/insight.",
+            "Zero marketing fluff. Avoid cringe phrases like 'Look no further', 'Game changer', 'Highly recommend', or 'You should check out'. Talk like a regular redditor, not an employee.",
+            "Adopt a realistic persona. You CAN mention personal anecdotes, hypothetical workflows, or past experiences ('I used to...', 'Reminds me of when I tried...', 'Lately I've been doing X') to make the response grounded and believable. Prioritize natural delivery over rigid truthfulness.",
+            "Deliver value or a chuckle first. Use witty banter, self-deprecation, clever insights, or practical tips. The product mention should feel like an organic 'by the way' or 'worth trying' afterthought, not a pitch.",
+            "If replying to a comment, match its specific context and energy perfectly (e.g., call out a shared pain point, riff on their joke, or piggyback on their advice).",
         ],
         "product_context": {
             "product_name": product_context.productName,
@@ -212,23 +199,28 @@ def _limit_comment_tree(comment_tree: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_image_parts(detail: dict[str, Any]) -> list[Any]:
+def _build_image_data_urls(detail: dict[str, Any]) -> list[str]:
     post_type = str(detail.get("post_type") or "").lower()
     if post_type not in {"image", "gallery"}:
         return []
 
-    image_parts = []
-    for url in _valid_image_urls(detail.get("media_urls") or [])[:MAX_IMAGES_FOR_GEMINI]:
+    image_data_urls = []
+    for url in _valid_image_urls(detail.get("media_urls") or [])[:MAX_IMAGES_FOR_OPENROUTER]:
         image_data = download_image_bytes(url)
         if not image_data:
             continue
-        image_parts.append(
-            types.Part.from_bytes(
-                data=image_data["bytes_data"],
-                mime_type=image_data["mime_type"],
-            )
-        )
-    return image_parts
+        data_url = _image_bytes_to_data_url(image_data["bytes_data"], image_data["mime_type"])
+        if data_url:
+            image_data_urls.append(data_url)
+    return image_data_urls
+
+
+def _image_bytes_to_data_url(bytes_data: bytes, mime_type: str) -> str:
+    normalized_mime_type = (mime_type or "image/jpeg").split(";", 1)[0].strip().lower()
+    if normalized_mime_type not in SUPPORTED_IMAGE_MIME_TYPES:
+        return ""
+    encoded = base64.b64encode(bytes_data).decode("ascii")
+    return f"data:{normalized_mime_type};base64,{encoded}"
 
 
 def _valid_image_urls(urls: list[str]) -> list[str]:
@@ -267,14 +259,14 @@ def _build_allowed_targets(post_url: str, detail: dict[str, Any]) -> dict[str, s
 def _validate_decision(raw_decision: dict[str, Any], allowed_targets: dict[str, str]) -> dict[str, Any]:
     should_comment = bool(raw_decision.get("shouldComment"))
     if not should_comment:
-        return _skipped("Gemini 判断该帖子不适合自然评论")
+        return _skipped("OpenRouter 判断该帖子不适合自然评论")
 
     comment_url = _normalize_reddit_target_url(str(raw_decision.get("commentUrl") or ""))
     comment_text = str(raw_decision.get("commentText") or "").strip()
     if not comment_url or comment_url not in allowed_targets:
-        return _skipped("Gemini 返回的评论目标 URL 不在可用目标列表中")
+        return _skipped("OpenRouter 返回的评论目标 URL 不在可用目标列表中")
     if not comment_text:
-        return _skipped("Gemini 未返回有效评论内容")
+        return _skipped("OpenRouter 未返回有效评论内容")
     return {
         "status": "success",
         "reason": "",
@@ -283,7 +275,7 @@ def _validate_decision(raw_decision: dict[str, Any], allowed_targets: dict[str, 
     }
 
 
-def _should_skip_before_gemini(detail: dict[str, Any]) -> bool:
+def _should_skip_before_model(detail: dict[str, Any]) -> bool:
     body_text = str(detail.get("body_text") or "").strip()
     comments = (detail.get("comment_tree") or {}).get("comments") or []
     post_type = str(detail.get("post_type") or "").lower()

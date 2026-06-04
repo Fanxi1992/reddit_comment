@@ -1,15 +1,13 @@
 import json
-import os
 import re
 from typing import Any
 
 from dotenv import load_dotenv
-from google import genai
 
+from app.openrouter_client import chat_json, get_openrouter_query_model
 from app.schemas import PlannedQuery, QueryPlanGenerateRequest, QueryPlanGenerateResponse
 
 
-MODEL_NAME = "gemini-3.5-flash"
 ENGLISH_QUERY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\s'&+/\-]{1,118}[A-Za-z0-9?]$")
 
 load_dotenv()
@@ -51,40 +49,31 @@ QUERY_PLAN_SCHEMA: dict[str, Any] = {
                     },
                 },
                 "required": ["query", "intent", "reason", "priority", "suggestedTimeRange"],
+                "additionalProperties": False,
             },
         }
     },
     "required": ["queries"],
+    "additionalProperties": False,
 }
 
 
 def generate_query_plan(payload: QueryPlanGenerateRequest) -> QueryPlanGenerateResponse:
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise RuntimeError("缺少环境变量 GEMINI_API_KEY")
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=_build_prompt(payload),
-        config={
-            "response_mime_type": "application/json",
-            "response_json_schema": QUERY_PLAN_SCHEMA,
-        },
+    raw_data = chat_json(
+        model=get_openrouter_query_model(),
+        prompt=_build_prompt(payload),
+        schema_name="query_plan",
+        schema=QUERY_PLAN_SCHEMA,
     )
 
-    if not response.text:
-        raise RuntimeError("Gemini 未返回 query 规划结果")
-
     try:
-        raw_data = json.loads(response.text)
         response_payload = QueryPlanGenerateResponse.model_validate(raw_data)
     except Exception as exc:
-        raise RuntimeError(f"Gemini 返回格式无法解析: {exc}") from exc
+        raise RuntimeError(f"OpenRouter 返回 query 规划格式无法解析: {exc}") from exc
 
     cleaned_queries = _clean_queries(response_payload.queries)
     if not cleaned_queries:
-        raise RuntimeError("Gemini 未生成有效英文 Reddit 搜索 query")
+        raise RuntimeError("OpenRouter 未生成有效英文 Reddit 搜索 query")
 
     return QueryPlanGenerateResponse(queries=cleaned_queries[: payload.desiredQueryCount])
 

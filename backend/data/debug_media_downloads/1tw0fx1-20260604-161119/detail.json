@@ -1,0 +1,34 @@
+{
+  "postUrl": "https://www.reddit.com/r/binance/comments/1tw0fx1/wtf_does_this_mean",
+  "postId": "1tw0fx1",
+  "detailStatus": "success",
+  "reason": "",
+  "finalUrl": "https://www.reddit.com/r/binance/comments/1tw0fx1/wtf_does_this_mean/",
+  "title": "Wtf does this mean",
+  "subreddit": "r/binance",
+  "author": "boogersingh",
+  "postType": "image",
+  "bodyTextPreview": "I have no clue what this means I just wanna withdraw man",
+  "outboundUrl": "",
+  "allMediaUrls": [
+    "https://i.redd.it/k71aehq0g45h1.png"
+  ],
+  "validRedditImageUrls": [
+    "https://i.redd.it/k71aehq0g45h1.png"
+  ],
+  "downloadedFiles": [
+    {
+      "index": 1,
+      "url": "https://i.redd.it/k71aehq0g45h1.png",
+      "status": "success",
+      "mimeType": "image/png",
+      "bytes": 128927,
+      "file": "D:\\github apps\\outer_comment_generator\\backend\\data\\debug_media_downloads\\1tw0fx1-20260604-161119\\image-1.png"
+    }
+  ],
+  "commentStats": {
+    "reportedComments": 9,
+    "loadedCommentCount": 9,
+    "includedCommentCount": 5
+  }
+}

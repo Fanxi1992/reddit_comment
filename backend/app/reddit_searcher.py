@@ -413,7 +413,14 @@ class RedditSearchRunner:
             new_count = 0
             for item in round_items:
                 normalized_url = normalize_post_url(item.post_url)
-                if not normalized_url or normalized_url in seen_items:
+                if not normalized_url:
+                    continue
+                existing_item = seen_items.get(normalized_url)
+                if existing_item:
+                    if _is_better_search_item(item, existing_item):
+                        item.post_url = normalized_url
+                        item.result_index = existing_item.result_index
+                        seen_items[normalized_url] = item
                     continue
                 item.post_url = normalized_url
                 item.result_index = len(seen_items) + 1
@@ -421,24 +428,35 @@ class RedditSearchRunner:
                 new_count += 1
 
             if len(seen_items) >= target_count:
-                return list(seen_items.values())[:target_count]
+                collected_items = list(seen_items.values())[:target_count]
+                _log_suspicious_metadata_duplicates(query, collected_items)
+                return collected_items
             if scroll_round >= max_scroll_rounds:
-                return list(seen_items.values())
+                collected_items = list(seen_items.values())
+                _log_suspicious_metadata_duplicates(query, collected_items)
+                return collected_items
             if new_count == 0:
                 no_growth_rounds += 1
                 if seen_items and no_growth_rounds >= 3:
-                    return list(seen_items.values())
+                    collected_items = list(seen_items.values())
+                    _log_suspicious_metadata_duplicates(query, collected_items)
+                    return collected_items
             else:
                 no_growth_rounds = 0
+            visible_url_count = self._visible_search_result_url_count(page)
             self._perform_search_results_scroll(page)
+            self._wait_for_search_results_to_settle(page, visible_url_count)
             self._settle_page(page)
-        return list(seen_items.values())
+        collected_items = list(seen_items.values())
+        _log_suspicious_metadata_duplicates(query, collected_items)
+        return collected_items
 
     def _collect_search_results(self, page: Page, query: str, max_results: int) -> list[RawSearchResult]:
         raw_items = page.evaluate(
             """
             (maxResults) => {
                 const text = (el) => el ? (el.innerText || el.textContent || "").trim() : "";
+                const titleSelector = "a[data-testid='post-title-text'], a[data-testid='post-title']";
                 const normalizeUrl = (href) => {
                     if (!href) return "";
                     return href.startsWith("http") ? href : `https://www.reddit.com${href}`;
@@ -454,7 +472,56 @@ class RedditSearchRunner:
                     if (suffix === "m") number *= 1000000;
                     return Number.isFinite(number) ? Math.trunc(number) : null;
                 };
-                const anchors = Array.from(document.querySelectorAll("a[data-testid='post-title-text'], a[data-testid='post-title']"));
+                const countTitleAnchors = (root) => {
+                    if (!root || !root.querySelectorAll) return 0;
+                    const descendantCount = root.querySelectorAll(titleSelector).length;
+                    return (root.matches && root.matches(titleSelector) ? 1 : 0) + descendantCount;
+                };
+                const findSubredditText = (root) => {
+                    const subredditEl =
+                        root.querySelector("a[aria-haspopup='dialog'][href^='/r/']:not([href*='/comments/']) .truncate") ||
+                        root.querySelector("a[href^='/r/']:not([href*='/comments/']) .truncate") ||
+                        root.querySelector("a[aria-haspopup='dialog'][href^='/r/']:not([href*='/comments/'])") ||
+                        root.querySelector("a[href^='/r/']:not([href*='/comments/'])");
+                    return text(subredditEl).split(/\\s+/)[0];
+                };
+                const isInvalidSearchBlock = (value) => {
+                    const lowered = (value || "").toLowerCase();
+                    return lowered.includes("people also search for")
+                        || lowered.includes("view answers")
+                        || /^answers\\b/i.test(lowered)
+                        || /^posts\\b/i.test(lowered);
+                };
+                const findResultCard = (anchor) => {
+                    let node = anchor;
+                    for (let depth = 0; depth < 12 && node && node !== document.body; depth += 1) {
+                        const titleCount = countTitleAnchors(node);
+                        if (titleCount > 1) {
+                            break;
+                        }
+
+                        const rawText = text(node);
+                        const subredditText = findSubredditText(node);
+                        const titleText = text(anchor) || anchor.getAttribute("aria-label") || "";
+                        if (
+                            titleCount === 1
+                            && titleText
+                            && /^r\\//i.test(subredditText)
+                            && !isInvalidSearchBlock(rawText)
+                        ) {
+                            return {
+                                root: node,
+                                rawText,
+                                subredditText,
+                                titleText,
+                                titleCount,
+                            };
+                        }
+                        node = node.parentElement;
+                    }
+                    return null;
+                };
+                const anchors = Array.from(document.querySelectorAll(titleSelector));
                 const items = [];
                 const seen = new Set();
 
@@ -463,43 +530,20 @@ class RedditSearchRunner:
                     const href = normalizeUrl(anchor.getAttribute("href") || "");
                     if (!href || seen.has(href) || !/\\/comments\\//i.test(href)) continue;
 
-                    let node = anchor;
-                    let candidate = null;
-                    for (let depth = 0; depth < 10 && node; depth += 1) {
-                        const rawText = text(node);
-                        const lowered = rawText.toLowerCase();
-                        const subredditEl =
-                            node.querySelector("a[aria-haspopup='dialog'][href^='/r/']:not([href*='/comments/']) .truncate") ||
-                            node.querySelector("a[href^='/r/']:not([href*='/comments/']) .truncate") ||
-                            node.querySelector("a[aria-haspopup='dialog'][href^='/r/']:not([href*='/comments/'])") ||
-                            node.querySelector("a[href^='/r/']:not([href*='/comments/'])");
-                        const subredditText = text(subredditEl).split(/\\s+/)[0];
-                        const timeEl = node.querySelector("time");
-                        const counterRow = node.querySelector("[data-testid='search-counter-row']");
-                        const numberNodes = counterRow ? Array.from(counterRow.querySelectorAll("faceplate-number[number]")) : [];
-                        const title =
-                            text(node.querySelector("a[data-testid='post-title-text']")) ||
-                            anchor.getAttribute("aria-label") ||
-                            text(anchor);
-                        const invalid =
-                            lowered.includes("people also search for")
-                            || lowered.includes("view answers")
-                            || /^answers\\b/i.test(lowered)
-                            || /^posts\\b/i.test(lowered);
-                        if (/^r\\//i.test(subredditText) && !invalid && title) {
-                            candidate = {
-                                post_url: href,
-                                title,
-                                subreddit: subredditText,
-                                age_text: timeEl ? text(timeEl) : "",
-                                votes: numberNodes[0] ? parseCount(numberNodes[0].getAttribute("number") || text(numberNodes[0])) : null,
-                                comments: numberNodes[1] ? parseCount(numberNodes[1].getAttribute("number") || text(numberNodes[1])) : null,
-                                raw_text: rawText,
-                            };
-                        }
-                        node = node.parentElement;
-                    }
-                    if (!candidate || !candidate.post_url || !candidate.title || !candidate.subreddit) continue;
+                    const card = findResultCard(anchor);
+                    if (!card) continue;
+                    const timeEl = card.root.querySelector("time");
+                    const counterRow = card.root.querySelector("[data-testid='search-counter-row']");
+                    const numberNodes = counterRow ? Array.from(counterRow.querySelectorAll("faceplate-number[number]")) : [];
+                    const candidate = {
+                        post_url: href,
+                        title: card.titleText,
+                        subreddit: card.subredditText,
+                        age_text: timeEl ? text(timeEl) : "",
+                        votes: numberNodes[0] ? parseCount(numberNodes[0].getAttribute("number") || text(numberNodes[0])) : null,
+                        comments: numberNodes[1] ? parseCount(numberNodes[1].getAttribute("number") || text(numberNodes[1])) : null,
+                        raw_text: `${card.rawText}\\n__debug__ titleAnchorText=${text(anchor)} containerTitleCount=${card.titleCount} containerTag=${card.root.tagName || ""}`,
+                    };
                     seen.add(candidate.post_url);
                     items.push(candidate);
                 }
@@ -530,6 +574,48 @@ class RedditSearchRunner:
                 )
             )
         return items
+
+    def _visible_search_result_url_count(self, page: Page) -> int:
+        try:
+            return int(
+                page.evaluate(
+                    """
+                    () => {
+                        const normalizeUrl = (href) => {
+                            if (!href) return "";
+                            return href.startsWith("http") ? href : `https://www.reddit.com${href}`;
+                        };
+                        const urls = new Set();
+                        for (const anchor of document.querySelectorAll("a[data-testid='post-title-text'], a[data-testid='post-title']")) {
+                            const rect = anchor.getBoundingClientRect();
+                            if (rect.width <= 0 || rect.height <= 0) continue;
+                            const href = normalizeUrl(anchor.getAttribute("href") || "");
+                            if (/\\/comments\\//i.test(href)) urls.add(href);
+                        }
+                        return urls.size;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return 0
+
+    def _wait_for_search_results_to_settle(self, page: Page, previous_visible_url_count: int) -> None:
+        deadline = time.time() + 8.0
+        stable_rounds = 0
+        last_count = -1
+        while time.time() < deadline:
+            current_count = self._visible_search_result_url_count(page)
+            if current_count > previous_visible_url_count:
+                return
+            if current_count == last_count and current_count > 0:
+                stable_rounds += 1
+                if stable_rounds >= 4:
+                    return
+            else:
+                stable_rounds = 0
+                last_count = current_count
+            time.sleep(0.35)
 
     def _perform_search_results_scroll(self, page: Page) -> None:
         viewport_height = int(
@@ -827,6 +913,56 @@ def _rate_limited_adspower_get(url: str, *, params: dict[str, Any], headers: dic
         response = requests.get(url, params=params, headers=headers, timeout=timeout)
         _adspower_last_api_call_at = time.monotonic()
         return response
+
+
+def _is_better_search_item(candidate: RawSearchResult, existing: RawSearchResult) -> bool:
+    return _search_item_quality_score(candidate) > _search_item_quality_score(existing)
+
+
+def _search_item_quality_score(item: RawSearchResult) -> int:
+    score = 0
+    if item.title.strip():
+        score += 3
+    if item.subreddit.strip().lower().startswith("r/"):
+        score += 3
+    if item.age_text.strip():
+        score += 1
+    if item.votes is not None:
+        score += 1
+    if item.comments is not None:
+        score += 1
+    if item.raw_text.strip():
+        score += min(2, len(item.raw_text.strip()) // 120)
+    return score
+
+
+def _log_suspicious_metadata_duplicates(query: str, items: list[RawSearchResult]) -> None:
+    buckets: dict[tuple[str, str, str, int | None, int | None], list[str]] = {}
+    for item in items:
+        signature = (
+            _normalize_visible_text(item.title).lower(),
+            item.subreddit.lower(),
+            _normalize_visible_text(item.age_text).lower(),
+            item.votes,
+            item.comments,
+        )
+        if not signature[0] or not signature[1]:
+            continue
+        buckets.setdefault(signature, []).append(item.post_url)
+
+    for signature, urls in buckets.items():
+        if len(set(urls)) < 4:
+            continue
+        logger.warning(
+            "Suspicious repeated Reddit search metadata: query=%s title=%s subreddit=%s age=%s votes=%s comments=%s url_count=%s",
+            query,
+            signature[0],
+            signature[1],
+            signature[2],
+            signature[3],
+            signature[4],
+            len(set(urls)),
+        )
 
 
 class SearchResultDeduper:

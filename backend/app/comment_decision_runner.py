@@ -111,7 +111,8 @@ class DetailEnvironmentRunner:
             page.wait_for_load_state("domcontentloaded", timeout=20000)
             self._accept_mature_content_gate_if_present(page)
             self._wait_for_detail_post(page)
-            time.sleep(random.uniform(0.8, 1.3))
+            self._wait_for_detail_content_ready(page)
+            time.sleep(random.uniform(0.2, 0.4))
             observation = self.detail_observer.collect(page, origin="comment_decision")
             comment_tree = self.comment_extractor.collect(page, total_comment_count=observation.comments or 0)
             limited_comment_tree = comment_tree.to_limited_dict(self.max_comments_per_post)
@@ -373,6 +374,10 @@ class DetailEnvironmentRunner:
                         shredditCommentCount: document.querySelectorAll("shreddit-comment").length,
                         hasPostH1: Boolean(document.querySelector("shreddit-post h1")),
                         hasPostTitleAttr: Boolean(document.querySelector("shreddit-post")?.getAttribute("post-title")),
+                        postTypeAttr: document.querySelector("shreddit-post")?.getAttribute("post-type") || "",
+                        contentHrefAttr: document.querySelector("shreddit-post")?.getAttribute("content-href") || "",
+                        hasPostMediaContainer: Boolean(document.querySelector("shreddit-post [slot='post-media-container']")),
+                        hasPostImage: Boolean(document.querySelector("shreddit-post img#post-image, shreddit-post .lightboxed-content img, shreddit-post zoomable-img img")),
                         bodyTextPreview: bodyText.slice(0, 240),
                     };
                 }
@@ -391,6 +396,72 @@ class DetailEnvironmentRunner:
                     return
                 time.sleep(0.1)
             raise RuntimeError(f"detail_url_not_reached:{page.url}")
+
+    def _wait_for_detail_content_ready(self, page) -> None:
+        deadline = time.time() + 8.0
+        last_signature = ""
+        stable_since = 0.0
+        while time.time() < deadline:
+            try:
+                state = page.evaluate(
+                    """
+                    () => {
+                        const post = document.querySelector("shreddit-post");
+                        if (!post) return {hasPost: false, signature: ""};
+                        const text = (el) => el ? (el.innerText || el.textContent || "").trim() : "";
+                        const attr = (el, name) => el ? (el.getAttribute(name) || "") : "";
+                        const mediaContainer = post.querySelector("[slot='post-media-container']");
+                        const bodyEl = post.querySelector("div[slot='text-body'], [slot='text-body'], .md");
+                        const postType = attr(post, "post-type");
+                        const contentHref = attr(post, "content-href");
+                        const hasImage = Boolean(post.querySelector(
+                            "img#post-image[src], .lightboxed-content img[src], zoomable-img img[src], img.preview-img[src]"
+                        ));
+                        const hasVideo = Boolean(post.querySelector(
+                            "shreddit-player[src], video[src], source[src]"
+                        ));
+                        const hasGallery = Boolean(post.querySelector(
+                            "gallery-carousel, shreddit-gallery-carousel"
+                        ));
+                        const bodyText = text(bodyEl);
+                        const hasMediaSignal = Boolean(postType || contentHref || mediaContainer || hasImage || hasVideo || hasGallery);
+                        const hasTextSignal = Boolean(bodyText || attr(post, "post-title"));
+                        return {
+                            hasPost: true,
+                            ready: hasMediaSignal || hasTextSignal,
+                            hasMediaSignal,
+                            hasTextSignal,
+                            signature: [
+                                postType,
+                                contentHref,
+                                mediaContainer ? "media" : "",
+                                hasImage ? "image" : "",
+                                hasVideo ? "video" : "",
+                                hasGallery ? "gallery" : "",
+                                bodyText.length,
+                            ].join("|"),
+                        };
+                    }
+                    """
+                )
+            except Exception:
+                time.sleep(0.2)
+                continue
+
+            if not state.get("hasPost"):
+                time.sleep(0.2)
+                continue
+            if state.get("hasMediaSignal"):
+                return
+            if state.get("ready"):
+                signature = str(state.get("signature") or "")
+                now = time.time()
+                if signature != last_signature:
+                    last_signature = signature
+                    stable_since = now
+                elif stable_since and now - stable_since >= 1.0:
+                    return
+            time.sleep(0.2)
 
     def _start_browser(self) -> str | None:
         url = f"{self.profile.api_url}/api/v1/browser/start"
@@ -600,7 +671,7 @@ def _run_environment_worker(
                     )
                     result = _apply_success_budget(result, payload.maxSuggestions, success_budget, success_lock, stop_event)
                 except Exception as exc:
-                    result = _make_result(item, "failed", f"Gemini 评论决策失败: {exc}", profile.env_id)
+                    result = _make_result(item, "failed", f"Openrouter评论决策失败: {exc}", profile.env_id)
 
                 event_queue.put({"type": "post_result", "environmentId": profile.env_id, "result": result})
                 counts["processed"] += 1
