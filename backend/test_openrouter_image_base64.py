@@ -14,7 +14,7 @@ OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 load_dotenv()
 
 # Keep this empty. Put the real key in backend/.env as OPENROUTER_API_KEY.
-OPENROUTER_API_KEY = ""
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 # Put your local image path here, then run this script directly.
 # Keep the leading r before the quote so Windows backslashes are treated safely.
