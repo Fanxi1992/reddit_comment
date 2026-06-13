@@ -494,7 +494,7 @@ class RedditSearchRunner:
             max_scan_count=max_scan_count,
         )
         no_growth_rounds = 0
-        max_scroll_rounds = 8
+        max_scroll_rounds = 30
 
         for scroll_round in range(max_scroll_rounds + 1):
             if self._is_no_results_page(page):
@@ -518,7 +518,7 @@ class RedditSearchRunner:
                 return outcome
             if new_count == 0:
                 no_growth_rounds += 1
-                if selector.scanned_result_count and no_growth_rounds >= 3:
+                if selector.scanned_result_count and no_growth_rounds >= 8:
                     outcome = selector.outcome()
                     _log_suspicious_metadata_duplicates(query, outcome.results)
                     return outcome
