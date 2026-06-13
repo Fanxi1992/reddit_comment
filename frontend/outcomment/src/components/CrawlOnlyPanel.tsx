@@ -9,6 +9,7 @@ import type {
   CrawlOnlyStreamEvent,
   PlannedQuery,
   RedditSearchResultItem,
+  SearchFilterCriteria,
 } from '../types'
 import { DownloadIcon, PlayIcon, StopIcon } from './icons'
 
@@ -16,6 +17,7 @@ type CrawlOnlyPanelProps = {
   source: CrawlOnlySource
   queries?: PlannedQuery[]
   searchResults?: RedditSearchResultItem[]
+  searchFilter?: SearchFilterCriteria
 }
 
 type PostState = {
@@ -38,7 +40,7 @@ const SOURCE_LABELS: Record<CrawlOnlySource, string> = {
   manual_urls: '手动导入 URL（仅抓取）',
 }
 
-export function CrawlOnlyPanel({ source, queries = [], searchResults = [] }: CrawlOnlyPanelProps) {
+export function CrawlOnlyPanel({ source, queries = [], searchResults = [], searchFilter }: CrawlOnlyPanelProps) {
   const [isRunning, setIsRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState('等待开始')
@@ -69,6 +71,7 @@ export function CrawlOnlyPanel({ source, queries = [], searchResults = [] }: Cra
     }
     if (source === 'simulated_search') {
       payload.queries = queries
+      payload.searchFilter = searchFilter
     } else {
       payload.urls = searchResults.map((item) => item.postUrl)
     }
@@ -112,7 +115,9 @@ export function CrawlOnlyPanel({ source, queries = [], searchResults = [] }: Cra
       return
     }
     if (event.type === 'query_result') {
-      setMessage(`搜索完成：${event.query}，去重 ${event.uniqueResultCount} 条 URL`)
+      setMessage(
+        `搜索完成：${event.query}，扫描 ${event.scannedResultCount ?? event.rawResultCount} 条，合格 ${event.qualifiedResultCount ?? event.uniqueResultCount} 条`,
+      )
       return
     }
     if (event.type === 'search_completed') {

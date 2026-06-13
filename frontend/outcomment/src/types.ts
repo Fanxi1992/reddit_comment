@@ -129,6 +129,12 @@ export type ApprovedQueryPlan = {
   approvedAt: string
 }
 
+export type SearchFilterCriteria = {
+  maxAgeDays?: number
+  minVotes?: number
+  minComments?: number
+}
+
 export type RedditSearchStatus = 'pending' | 'running' | 'success' | 'no_results' | 'failed'
 
 export type RedditSearchResultItem = {
@@ -161,6 +167,7 @@ export type RedditSearchRequestPayload = {
   queries: PlannedQuery[]
   perQueryLimit?: number
   searchSort?: 'relevance'
+  searchFilter?: SearchFilterCriteria
 }
 
 export type RedditSearchStreamEvent =
@@ -188,6 +195,11 @@ export type RedditSearchStreamEvent =
       searchResultsUrl: string
       rawResultCount: number
       uniqueResultCount: number
+      scannedResultCount?: number
+      qualifiedResultCount?: number
+      rejectedResultCount?: number
+      filterRejectCounts?: Record<string, number>
+      targetReached?: boolean
       results: RedditSearchResultItem[]
     }
   | {
@@ -210,6 +222,11 @@ export type QuerySearchState = {
   reason?: string
   rawResultCount: number
   uniqueResultCount: number
+  scannedResultCount: number
+  qualifiedResultCount: number
+  rejectedResultCount: number
+  filterRejectCounts: Record<string, number>
+  targetReached?: boolean
 }
 
 export type CommentDecisionStatus = 'pending' | 'detail' | 'gemini' | 'success' | 'skipped' | 'failed'
@@ -343,6 +360,7 @@ export type CrawlOnlyRequestPayload = {
   urls?: string[]
   maxCommentsPerPost?: number
   perQueryLimit?: number
+  searchFilter?: SearchFilterCriteria
 }
 
 export type CrawlOnlyResult = {
@@ -403,6 +421,11 @@ export type CrawlOnlyStreamEvent =
       searchResultsUrl: string
       rawResultCount: number
       uniqueResultCount: number
+      scannedResultCount?: number
+      qualifiedResultCount?: number
+      rejectedResultCount?: number
+      filterRejectCounts?: Record<string, number>
+      targetReached?: boolean
       results: RedditSearchResultItem[]
     }
   | {

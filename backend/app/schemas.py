@@ -65,6 +65,12 @@ SearchSort = Literal["relevance"]
 MAX_SEARCH_URL_BUDGET = 120
 
 
+class SearchFilterCriteria(BaseModel):
+    maxAgeDays: int | None = Field(default=None, ge=1, le=3650)
+    minVotes: int | None = Field(default=None, ge=0, le=10_000_000)
+    minComments: int | None = Field(default=None, ge=0, le=10_000_000)
+
+
 class QueryPlanGenerateRequest(BaseModel):
     productName: str = Field(..., min_length=1, max_length=200)
     productDescription: str = Field(..., min_length=1, max_length=4000)
@@ -94,6 +100,7 @@ class RedditSearchRequest(BaseModel):
     queries: list[PlannedQuery] = Field(..., min_length=1, max_length=6)
     perQueryLimit: int = Field(default=20, ge=1, le=MAX_SEARCH_URL_BUDGET)
     searchSort: SearchSort = "relevance"
+    searchFilter: SearchFilterCriteria | None = None
 
     @model_validator(mode="after")
     def validate_query_url_budget(self) -> "RedditSearchRequest":
@@ -181,6 +188,7 @@ class CrawlOnlyRequest(BaseModel):
     urls: list[HttpUrl] | None = Field(default=None, max_length=120)
     maxCommentsPerPost: int = Field(default=30, ge=1, le=200)
     perQueryLimit: int = Field(default=20, ge=1, le=MAX_SEARCH_URL_BUDGET)
+    searchFilter: SearchFilterCriteria | None = None
 
     @model_validator(mode="after")
     def validate_source_inputs(self) -> "CrawlOnlyRequest":

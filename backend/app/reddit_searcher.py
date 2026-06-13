@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
-from app.schemas import PlannedQuery, RedditSearchRequest, RedditSearchResultItem, RedditSearchSummary
+from app.schemas import PlannedQuery, RedditSearchRequest, RedditSearchResultItem, RedditSearchSummary, SearchFilterCriteria
 
 
 load_dotenv()
@@ -34,6 +34,7 @@ SEARCH_SORT_LABELS = {"relevance": "Relevance"}
 SEARCH_SORT_BY_LABEL = {value.lower(): key for key, value in SEARCH_SORT_LABELS.items()}
 DEFAULT_SEARCH_ENV_CONCURRENCY = 3
 DEFAULT_SEARCH_QUERIES_PER_ENV = 2
+DEFAULT_SEARCH_MAX_SCAN_PER_QUERY = 150
 ADSPOWER_API_MIN_INTERVAL_SECONDS = 1.1
 ADSPOWER_BROWSER_START_RETRIES = 4
 
@@ -62,6 +63,20 @@ class QuerySearchResult:
     search_results_url: str
     results: list[RawSearchResult]
     raw_url_count: int
+    scanned_result_count: int = 0
+    qualified_result_count: int = 0
+    rejected_result_count: int = 0
+    filter_reject_counts: dict[str, int] | None = None
+    target_reached: bool = False
+
+
+@dataclass
+class SearchCollectionOutcome:
+    results: list[RawSearchResult]
+    scanned_result_count: int
+    rejected_result_count: int
+    filter_reject_counts: dict[str, int]
+    target_reached: bool
 
 
 @dataclass
@@ -71,6 +86,60 @@ class AdsPowerSettings:
     user_id: str
     target_url: str = "https://www.reddit.com"
     env_id: str = "env-1"
+
+
+class SearchResultSelector:
+    def __init__(self, *, target_count: int, search_filter: SearchFilterCriteria | None, max_scan_count: int) -> None:
+        self.target_count = max(1, target_count)
+        self.search_filter = search_filter
+        self.max_scan_count = max(1, max_scan_count)
+        self.seen_urls: set[str] = set()
+        self.results: list[RawSearchResult] = []
+        self.scanned_result_count = 0
+        self.rejected_result_count = 0
+        self.filter_reject_counts: dict[str, int] = {}
+
+    @property
+    def target_reached(self) -> bool:
+        return len(self.results) >= self.target_count
+
+    @property
+    def scan_limit_reached(self) -> bool:
+        return self.scanned_result_count >= self.max_scan_count
+
+    def should_stop(self) -> bool:
+        return self.target_reached or self.scan_limit_reached
+
+    def add(self, item: RawSearchResult) -> bool:
+        if self.should_stop():
+            return False
+
+        normalized_url = normalize_post_url(item.post_url)
+        if not normalized_url or normalized_url in self.seen_urls:
+            return False
+
+        self.seen_urls.add(normalized_url)
+        self.scanned_result_count += 1
+        item.post_url = normalized_url
+        item.result_index = self.scanned_result_count
+
+        reject_reason = evaluate_search_filter_reject_reason(item, self.search_filter)
+        if reject_reason:
+            self.rejected_result_count += 1
+            self.filter_reject_counts[reject_reason] = self.filter_reject_counts.get(reject_reason, 0) + 1
+            return True
+
+        self.results.append(item)
+        return True
+
+    def outcome(self) -> SearchCollectionOutcome:
+        return SearchCollectionOutcome(
+            results=self.results[: self.target_count],
+            scanned_result_count=self.scanned_result_count,
+            rejected_result_count=self.rejected_result_count,
+            filter_reject_counts=dict(self.filter_reject_counts),
+            target_reached=self.target_reached,
+        )
 
 
 class HumanMouse:
@@ -173,6 +242,8 @@ class RedditSearchRunner:
         *,
         search_time: str,
         target_count: int,
+        search_filter: SearchFilterCriteria | None,
+        max_scan_count: int,
     ) -> QuerySearchResult:
         if self._context is None:
             raise RuntimeError("browser_context_not_initialized")
@@ -182,12 +253,20 @@ class RedditSearchRunner:
             search_results_url = self._run_search_flow_to_search_page(page, query)
             self._align_search_filters(page, search_time=search_time)
             search_results_url = page.url
-            results = self._collect_search_results_until_target(page, query, target_count)
-            if not results and self._is_no_results_page(page):
-                return QuerySearchResult("no_results", "no_results", search_results_url, [], 0)
-            status = "success" if results else "failed"
-            reason = "" if results else "no_search_results_collected"
-            return QuerySearchResult(status, reason, search_results_url, results, len(results))
+            outcome = self._collect_search_results_until_target(
+                page,
+                query,
+                target_count,
+                search_filter=search_filter,
+                max_scan_count=max_scan_count,
+            )
+            if not outcome.results and self._is_no_results_page(page):
+                return _make_query_search_result("no_results", "no_results", search_results_url, outcome)
+            status = "success" if outcome.results else "failed"
+            reason = "" if outcome.results else "no_qualified_search_results_collected"
+            if outcome.results and not outcome.target_reached:
+                reason = "target_not_reached_after_scan_limit" if outcome.scanned_result_count >= max_scan_count else "target_not_reached"
+            return _make_query_search_result(status, reason, search_results_url, outcome)
         except Exception as exc:
             return QuerySearchResult("failed", str(exc), "", [], 0)
         finally:
@@ -400,56 +479,58 @@ class RedditSearchRunner:
             raise RuntimeError(f"unsupported_{kind}_filter:{token}")
         return label
 
-    def _collect_search_results_until_target(self, page: Page, query: str, target_count: int) -> list[RawSearchResult]:
-        seen_items: dict[str, RawSearchResult] = {}
+    def _collect_search_results_until_target(
+        self,
+        page: Page,
+        query: str,
+        target_count: int,
+        *,
+        search_filter: SearchFilterCriteria | None,
+        max_scan_count: int,
+    ) -> SearchCollectionOutcome:
+        selector = SearchResultSelector(
+            target_count=target_count,
+            search_filter=search_filter,
+            max_scan_count=max_scan_count,
+        )
         no_growth_rounds = 0
         max_scroll_rounds = 8
 
         for scroll_round in range(max_scroll_rounds + 1):
             if self._is_no_results_page(page):
-                return []
+                return selector.outcome()
 
-            round_items = self._collect_search_results(page, query, max_results=max(target_count * 3, 80))
+            round_items = self._collect_search_results(page, query, max_results=max(target_count * 3, 80, max_scan_count))
             new_count = 0
             for item in round_items:
-                normalized_url = normalize_post_url(item.post_url)
-                if not normalized_url:
-                    continue
-                existing_item = seen_items.get(normalized_url)
-                if existing_item:
-                    if _is_better_search_item(item, existing_item):
-                        item.post_url = normalized_url
-                        item.result_index = existing_item.result_index
-                        seen_items[normalized_url] = item
-                    continue
-                item.post_url = normalized_url
-                item.result_index = len(seen_items) + 1
-                seen_items[normalized_url] = item
-                new_count += 1
+                if selector.add(item):
+                    new_count += 1
+                if selector.should_stop():
+                    break
 
-            if len(seen_items) >= target_count:
-                collected_items = list(seen_items.values())[:target_count]
-                _log_suspicious_metadata_duplicates(query, collected_items)
-                return collected_items
+            if selector.should_stop():
+                outcome = selector.outcome()
+                _log_suspicious_metadata_duplicates(query, outcome.results)
+                return outcome
             if scroll_round >= max_scroll_rounds:
-                collected_items = list(seen_items.values())
-                _log_suspicious_metadata_duplicates(query, collected_items)
-                return collected_items
+                outcome = selector.outcome()
+                _log_suspicious_metadata_duplicates(query, outcome.results)
+                return outcome
             if new_count == 0:
                 no_growth_rounds += 1
-                if seen_items and no_growth_rounds >= 3:
-                    collected_items = list(seen_items.values())
-                    _log_suspicious_metadata_duplicates(query, collected_items)
-                    return collected_items
+                if selector.scanned_result_count and no_growth_rounds >= 3:
+                    outcome = selector.outcome()
+                    _log_suspicious_metadata_duplicates(query, outcome.results)
+                    return outcome
             else:
                 no_growth_rounds = 0
             visible_url_count = self._visible_search_result_url_count(page)
             self._perform_search_results_scroll(page)
             self._wait_for_search_results_to_settle(page, visible_url_count)
             self._settle_page(page)
-        collected_items = list(seen_items.values())
-        _log_suspicious_metadata_duplicates(query, collected_items)
-        return collected_items
+        outcome = selector.outcome()
+        _log_suspicious_metadata_duplicates(query, outcome.results)
+        return outcome
 
     def _collect_search_results(self, page: Page, query: str, max_results: int) -> list[RawSearchResult]:
         raw_items = page.evaluate(
@@ -707,11 +788,21 @@ def run_reddit_search_batch(payload: RedditSearchRequest, stop_event: threading.
     chunks = _chunk_evenly(query_assignments, len(profiles))
     event_queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
     threads: list[threading.Thread] = []
+    max_scan_count = _load_search_max_scan_per_query()
 
     for environment_index, (settings, chunk) in enumerate(zip(profiles, chunks, strict=False), start=1):
         thread = threading.Thread(
             target=_run_search_environment_worker,
-            args=(settings, environment_index, chunk, payload.perQueryLimit, event_queue, stop_event),
+            args=(
+                settings,
+                environment_index,
+                chunk,
+                payload.perQueryLimit,
+                payload.searchFilter,
+                max_scan_count,
+                event_queue,
+                stop_event,
+            ),
             daemon=True,
         )
         threads.append(thread)
@@ -772,6 +863,8 @@ def _run_search_environment_worker(
     environment_index: int,
     assignments: list[tuple[int, PlannedQuery]],
     fallback_target_count: int,
+    search_filter: SearchFilterCriteria | None,
+    max_scan_count: int,
     event_queue: queue.Queue[dict[str, Any] | None],
     stop_event: threading.Event,
 ) -> None:
@@ -797,6 +890,8 @@ def _run_search_environment_worker(
                     query.query,
                     search_time=query.suggestedTimeRange,
                     target_count=target_count,
+                    search_filter=search_filter,
+                    max_scan_count=max_scan_count,
                 )
                 event_queue.put(
                     {
@@ -836,6 +931,26 @@ def _run_search_environment_worker(
         event_queue.put(None)
 
 
+def _make_query_search_result(
+    status: str,
+    reason: str,
+    search_results_url: str,
+    outcome: SearchCollectionOutcome,
+) -> QuerySearchResult:
+    return QuerySearchResult(
+        status=status,
+        reason=reason,
+        search_results_url=search_results_url,
+        results=outcome.results,
+        raw_url_count=outcome.scanned_result_count,
+        scanned_result_count=outcome.scanned_result_count,
+        qualified_result_count=len(outcome.results),
+        rejected_result_count=outcome.rejected_result_count,
+        filter_reject_counts=outcome.filter_reject_counts,
+        target_reached=outcome.target_reached,
+    )
+
+
 def _build_query_result_payload(
     *,
     deduper: "SearchResultDeduper",
@@ -858,8 +973,13 @@ def _build_query_result_payload(
         "status": result.status,
         "reason": result.reason,
         "searchResultsUrl": result.search_results_url,
-        "rawResultCount": len(result.results),
+        "rawResultCount": result.raw_url_count,
         "uniqueResultCount": sum(1 for item in raw_items if not item.duplicateOfQuery),
+        "scannedResultCount": result.scanned_result_count,
+        "qualifiedResultCount": result.qualified_result_count,
+        "rejectedResultCount": result.rejected_result_count,
+        "filterRejectCounts": result.filter_reject_counts or {},
+        "targetReached": result.target_reached,
         "results": [item.model_dump() for item in raw_items],
     }
 
@@ -888,6 +1008,16 @@ def _load_search_queries_per_env() -> int:
         return DEFAULT_SEARCH_QUERIES_PER_ENV
 
 
+def _load_search_max_scan_per_query() -> int:
+    raw_value = os.getenv("REDDIT_SEARCH_MAX_SCAN_PER_QUERY", "").strip()
+    if not raw_value:
+        return DEFAULT_SEARCH_MAX_SCAN_PER_QUERY
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return DEFAULT_SEARCH_MAX_SCAN_PER_QUERY
+
+
 def _chunk_evenly(items: list[tuple[int, PlannedQuery]], fanout: int) -> list[list[tuple[int, PlannedQuery]]]:
     if fanout <= 1:
         return [items]
@@ -913,6 +1043,62 @@ def _rate_limited_adspower_get(url: str, *, params: dict[str, Any], headers: dic
         response = requests.get(url, params=params, headers=headers, timeout=timeout)
         _adspower_last_api_call_at = time.monotonic()
         return response
+
+
+def evaluate_search_filter_reject_reason(
+    item: RawSearchResult,
+    search_filter: SearchFilterCriteria | None,
+) -> str | None:
+    if not search_filter:
+        return None
+
+    if search_filter.maxAgeDays is not None:
+        age_hours = parse_reddit_age_hours(item.age_text)
+        if age_hours is None:
+            return "missing_age"
+        if age_hours > search_filter.maxAgeDays * 24:
+            return "too_old"
+
+    if search_filter.minVotes is not None:
+        if item.votes is None:
+            return "missing_votes"
+        if item.votes < search_filter.minVotes:
+            return "low_votes"
+
+    if search_filter.minComments is not None:
+        if item.comments is None:
+            return "missing_comments"
+        if item.comments < search_filter.minComments:
+            return "low_comments"
+
+    return None
+
+
+def parse_reddit_age_hours(age_text: str) -> float | None:
+    value = _normalize_visible_text(age_text).lower()
+    if not value:
+        return None
+
+    match = re.search(
+        r"(\d+(?:\.\d+)?)\s*(mo|mon|mons|month|months|y|yr|yrs|year|years|d|day|days|h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\b",
+        value,
+    )
+    if not match:
+        return None
+
+    amount = float(match.group(1))
+    unit = match.group(2)
+    if unit in {"m", "min", "mins", "minute", "minutes"}:
+        return amount / 60
+    if unit in {"h", "hr", "hrs", "hour", "hours"}:
+        return amount
+    if unit in {"d", "day", "days"}:
+        return amount * 24
+    if unit in {"mo", "mon", "mons", "month", "months"}:
+        return amount * 30 * 24
+    if unit in {"y", "yr", "yrs", "year", "years"}:
+        return amount * 365 * 24
+    return None
 
 
 def _is_better_search_item(candidate: RawSearchResult, existing: RawSearchResult) -> bool:

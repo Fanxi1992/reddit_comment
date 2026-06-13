@@ -116,6 +116,7 @@ def _run_simulated_search(
         queries=payload.queries or [],
         perQueryLimit=payload.perQueryLimit,
         searchSort="relevance",
+        searchFilter=payload.searchFilter,
     )
     final_results: list[RedditSearchResultItem] = []
     metadata: dict[str, Any] = {}

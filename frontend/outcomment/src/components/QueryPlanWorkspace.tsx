@@ -19,6 +19,7 @@ import type {
   RedditSearchResultItem,
   RedditSearchStreamEvent,
   RedditSearchSummary,
+  SearchFilterCriteria,
   SuggestedTimeRange,
 } from '../types'
 import { CheckIcon, DownloadIcon, PlayIcon, PlusIcon, SparkIcon, StopIcon, TrashIcon, UploadIcon } from './icons'
@@ -66,6 +67,12 @@ const EMPTY_QUERY: PlannedQueryPayload = {
   suggestedTimeRange: 'week',
 }
 
+const DEFAULT_SEARCH_FILTER_INPUTS = {
+  maxAgeDays: '',
+  minVotes: '',
+  minComments: '',
+}
+
 type UrlSourceMode = 'search' | 'manual' | 'crawl-search' | 'crawl-manual'
 
 export function QueryPlanWorkspace() {
@@ -85,6 +92,7 @@ export function QueryPlanWorkspace() {
   const [searchError, setSearchError] = useState<string | null>(null)
   const [manualUrlsText, setManualUrlsText] = useState('')
   const [manualUrlError, setManualUrlError] = useState<string | null>(null)
+  const [searchFilterInputs, setSearchFilterInputs] = useState(DEFAULT_SEARCH_FILTER_INPUTS)
   const searchAbortRef = useRef<AbortController | null>(null)
   const manualUrlFileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -118,10 +126,12 @@ export function QueryPlanWorkspace() {
     !isGenerating
   const canStartSearch = Boolean(approvedPlan?.queries.length) && !isGenerating && !isSearching
   const manualUrlPreview = useMemo(() => parseManualRedditUrls(manualUrlsText), [manualUrlsText])
+  const searchFilter = useMemo(() => buildSearchFilter(searchFilterInputs), [searchFilterInputs])
   const isCommentSearchMode = urlSourceMode === 'search'
   const isCommentManualMode = urlSourceMode === 'manual'
   const isCrawlSearchMode = urlSourceMode === 'crawl-search'
   const isCrawlManualMode = urlSourceMode === 'crawl-manual'
+  const usesSearchFilter = isCommentSearchMode || isCrawlSearchMode
 
   const resetSearchState = () => {
     searchAbortRef.current?.abort()
@@ -146,6 +156,11 @@ export function QueryPlanWorkspace() {
     setApprovedPlan(null)
     setError(null)
     setManualUrlError(null)
+    resetSearchState()
+  }
+
+  const updateSearchFilterInput = (key: keyof typeof DEFAULT_SEARCH_FILTER_INPUTS, value: string) => {
+    setSearchFilterInputs((current) => ({ ...current, [key]: value }))
     resetSearchState()
   }
 
@@ -274,6 +289,7 @@ export function QueryPlanWorkspace() {
           queries: approvedPlan.queries,
           perQueryLimit: 20,
           searchSort: 'relevance',
+          searchFilter,
         },
         signal: controller.signal,
         onEvent: (event) => applySearchEvent(event, approvedPlan),
@@ -373,7 +389,15 @@ export function QueryPlanWorkspace() {
       }
       setQuerySearchStates((current) => ({
         ...current,
-        [query.id]: { status: 'running', rawResultCount: 0, uniqueResultCount: 0 },
+        [query.id]: {
+          status: 'running',
+          rawResultCount: 0,
+          uniqueResultCount: 0,
+          scannedResultCount: 0,
+          qualifiedResultCount: 0,
+          rejectedResultCount: 0,
+          filterRejectCounts: {},
+        },
       }))
       return
     }
@@ -390,6 +414,11 @@ export function QueryPlanWorkspace() {
           reason: event.reason,
           rawResultCount: event.rawResultCount,
           uniqueResultCount: event.uniqueResultCount,
+          scannedResultCount: event.scannedResultCount ?? event.rawResultCount,
+          qualifiedResultCount: event.qualifiedResultCount ?? event.uniqueResultCount,
+          rejectedResultCount: event.rejectedResultCount ?? 0,
+          filterRejectCounts: event.filterRejectCounts ?? {},
+          targetReached: event.targetReached,
         },
       }))
       return
@@ -538,6 +567,62 @@ export function QueryPlanWorkspace() {
           </div>
         </div>
 
+        {usesSearchFilter ? (
+          <section className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">搜索结果筛选</h2>
+                <p className="mt-1 text-sm text-slate-500">空值表示不限制；筛选在搜索页收集 URL 时生效。</p>
+              </div>
+              <button
+                className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-teal-300 hover:text-teal-700"
+                onClick={() => {
+                  setSearchFilterInputs(DEFAULT_SEARCH_FILTER_INPUTS)
+                  resetSearchState()
+                }}
+                type="button"
+              >
+                清空筛选
+              </button>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-500">发布时间 N 天以内</span>
+                <input
+                  className={`${inputClassName} mt-1`}
+                  min={1}
+                  onChange={(event) => updateSearchFilterInput('maxAgeDays', event.target.value)}
+                  placeholder="例如 3"
+                  type="number"
+                  value={searchFilterInputs.maxAgeDays}
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-500">最少 Votes</span>
+                <input
+                  className={`${inputClassName} mt-1`}
+                  min={0}
+                  onChange={(event) => updateSearchFilterInput('minVotes', event.target.value)}
+                  placeholder="例如 50"
+                  type="number"
+                  value={searchFilterInputs.minVotes}
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-500">最少 Comments</span>
+                <input
+                  className={`${inputClassName} mt-1`}
+                  min={0}
+                  onChange={(event) => updateSearchFilterInput('minComments', event.target.value)}
+                  placeholder="例如 20"
+                  type="number"
+                  value={searchFilterInputs.minComments}
+                />
+              </label>
+            </div>
+          </section>
+        ) : null}
+
         {isCommentSearchMode ? (
           <div className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -683,7 +768,7 @@ export function QueryPlanWorkspace() {
                       </select>
                     </label>
                     <label className="block">
-                      <span className="text-xs font-semibold text-slate-500">URL 数</span>
+                      <span className="text-xs font-semibold text-slate-500">目标合格 URL</span>
                       <input
                         className={`${inputClassName} mt-1`}
                         max={MAX_QUERY_URL_BUDGET}
@@ -825,7 +910,7 @@ export function QueryPlanWorkspace() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-slate-950">Reddit URL 搜索汇总</h2>
-                <p className="mt-1 text-sm text-slate-500">按每条 Query 的时间范围执行搜索，默认每条抓取 Top 20。</p>
+                <p className="mt-1 text-sm text-slate-500">按每条 Query 的时间范围执行搜索，URL 数表示目标合格结果数。</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -888,10 +973,14 @@ export function QueryPlanWorkspace() {
                   status: 'pending',
                   rawResultCount: 0,
                   uniqueResultCount: 0,
+                  scannedResultCount: 0,
+                  qualifiedResultCount: 0,
+                  rejectedResultCount: 0,
+                  filterRejectCounts: {},
                 }
                 return (
                   <div
-                    className="grid gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm md:grid-cols-[40px_minmax(0,1fr)_110px_110px_120px]"
+                    className="grid gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm md:grid-cols-[40px_minmax(0,1fr)_110px_110px_180px]"
                     key={item.id}
                   >
                     <span className="font-semibold text-slate-500">#{index + 1}</span>
@@ -901,8 +990,12 @@ export function QueryPlanWorkspace() {
                     <span className="text-slate-500">{timeRangeLabel(item.suggestedTimeRange)}</span>
                     <span className={statusClassName(state.status)}>{statusLabel(state.status)}</span>
                     <span className="text-slate-500">
-                      {state.rawResultCount} / {state.uniqueResultCount} URL
+                      扫描 {state.scannedResultCount || state.rawResultCount} · 合格{' '}
+                      {state.qualifiedResultCount || state.uniqueResultCount} · 丢弃 {state.rejectedResultCount}
                     </span>
+                    {state.status === 'success' && state.targetReached === false ? (
+                      <span className="md:col-span-5 text-xs font-medium text-amber-700">筛选后数量不足，已返回当前可用合格 URL。</span>
+                    ) : null}
                     {state.reason && state.status === 'failed' ? (
                       <span className="md:col-span-5 text-xs text-rose-600">{state.reason}</span>
                     ) : null}
@@ -958,7 +1051,12 @@ export function QueryPlanWorkspace() {
         )}
 
         {isCrawlSearchMode && validCrawlQueries.length > 0 && crawlQueryBudget.total <= MAX_QUERY_URL_BUDGET ? (
-          <CrawlOnlyPanel key={`crawl-search-${validCrawlQueries.map((item) => item.query).join('|')}`} queries={validCrawlQueries} source="simulated_search" />
+          <CrawlOnlyPanel
+            key={`crawl-search-${validCrawlQueries.map((item) => item.query).join('|')}-${JSON.stringify(searchFilter ?? {})}`}
+            queries={validCrawlQueries}
+            searchFilter={searchFilter}
+            source="simulated_search"
+          />
         ) : null}
 
         {isCrawlManualMode && searchResults.length > 0 ? (
@@ -1039,7 +1137,7 @@ export function QueryPlanWorkspace() {
                   </label>
 
                   <label className="block">
-                    <span className="text-xs font-semibold text-slate-500">URL 数</span>
+                    <span className="text-xs font-semibold text-slate-500">目标合格 URL</span>
                     <input
                       className={`${inputClassName} mt-1`}
                       max={MAX_QUERY_URL_BUDGET}
@@ -1206,6 +1304,10 @@ function createInitialSearchStates(queries: PlannedQuery[]): Record<string, Quer
         status: 'pending',
         rawResultCount: 0,
         uniqueResultCount: 0,
+        scannedResultCount: 0,
+        qualifiedResultCount: 0,
+        rejectedResultCount: 0,
+        filterRejectCounts: {},
       } satisfies QuerySearchState,
     ]),
   )
@@ -1276,6 +1378,36 @@ function normalizeQueryTargetUrlCount(query: PlannedQuery): PlannedQuery {
     ...query,
     targetUrlCount: clampTargetUrlCount(query.targetUrlCount ?? defaultTargetUrlCount(1)),
   }
+}
+
+function buildSearchFilter(inputs: typeof DEFAULT_SEARCH_FILTER_INPUTS): SearchFilterCriteria | undefined {
+  const filter: SearchFilterCriteria = {}
+  const maxAgeDays = parseOptionalInt(inputs.maxAgeDays, 1)
+  const minVotes = parseOptionalInt(inputs.minVotes, 0)
+  const minComments = parseOptionalInt(inputs.minComments, 0)
+
+  if (maxAgeDays !== undefined) {
+    filter.maxAgeDays = maxAgeDays
+  }
+  if (minVotes !== undefined) {
+    filter.minVotes = minVotes
+  }
+  if (minComments !== undefined) {
+    filter.minComments = minComments
+  }
+
+  return Object.keys(filter).length ? filter : undefined
+}
+
+function parseOptionalInt(value: string, minimum: number): number | undefined {
+  if (!value.trim()) {
+    return undefined
+  }
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) {
+    return undefined
+  }
+  return Math.max(minimum, Math.trunc(parsed))
 }
 
 function defaultTargetUrlCount(queryCount: number): number {
