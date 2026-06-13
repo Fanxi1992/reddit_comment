@@ -572,7 +572,7 @@ export function QueryPlanWorkspace() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-slate-950">搜索结果筛选</h2>
-                <p className="mt-1 text-sm text-slate-500">空值表示不限制；筛选在搜索页收集 URL 时生效。</p>
+                <p className="mt-1 text-sm text-slate-500">筛选在搜索页收集 URL 时生效。</p>
               </div>
               <button
                 className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600 transition hover:border-teal-300 hover:text-teal-700"
@@ -584,6 +584,9 @@ export function QueryPlanWorkspace() {
               >
                 清空筛选
               </button>
+            </div>
+            <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
+              这些筛选项都是可选项：不填写就不会按该项过滤；填写后才会启用对应条件。
             </div>
             <div className="mt-3 grid gap-3 md:grid-cols-3">
               <label className="block">
