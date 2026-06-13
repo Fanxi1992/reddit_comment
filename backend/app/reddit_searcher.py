@@ -527,7 +527,7 @@ class RedditSearchRunner:
             visible_url_count = self._visible_search_result_url_count(page)
             self._perform_search_results_scroll(page)
             self._wait_for_search_results_to_settle(page, visible_url_count)
-            self._settle_page(page)
+            self._settle_after_search_scroll(page)
         outcome = selector.outcome()
         _log_suspicious_metadata_duplicates(query, outcome.results)
         return outcome
@@ -682,7 +682,7 @@ class RedditSearchRunner:
             return 0
 
     def _wait_for_search_results_to_settle(self, page: Page, previous_visible_url_count: int) -> None:
-        deadline = time.time() + 8.0
+        deadline = time.time() + 4.0
         stable_rounds = 0
         last_count = -1
         while time.time() < deadline:
@@ -691,29 +691,36 @@ class RedditSearchRunner:
                 return
             if current_count == last_count and current_count > 0:
                 stable_rounds += 1
-                if stable_rounds >= 4:
+                if stable_rounds >= 3:
                     return
             else:
                 stable_rounds = 0
                 last_count = current_count
-            time.sleep(0.35)
+            time.sleep(0.25)
 
     def _perform_search_results_scroll(self, page: Page) -> None:
         viewport_height = int(
             page.evaluate("() => Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 700)")
         )
-        target_distance = max(260, int(viewport_height * random.uniform(0.92, 1.1)))
-        chunks = max(3, min(8, int(target_distance / 220)))
+        target_distance = max(520, int(viewport_height * random.uniform(1.35, 1.75)))
+        chunks = max(2, min(6, int(target_distance / 360)))
         travelled = 0
         for index in range(chunks):
             remaining = target_distance - travelled
             if remaining <= 0:
                 break
-            delta = remaining if index == chunks - 1 else min(remaining, random.randint(90, 240))
+            delta = remaining if index == chunks - 1 else min(remaining, random.randint(220, 420))
             page.mouse.wheel(0, delta)
             travelled += delta
-            time.sleep(random.uniform(0.08, 0.18))
-        time.sleep(random.uniform(1.0, 1.8))
+            time.sleep(random.uniform(0.04, 0.1))
+        time.sleep(random.uniform(0.35, 0.75))
+
+    def _settle_after_search_scroll(self, page: Page) -> None:
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=800)
+        except PlaywrightTimeoutError:
+            pass
+        time.sleep(random.uniform(0.15, 0.35))
 
     def _is_no_results_page(self, page: Page) -> bool:
         try:
