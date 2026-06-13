@@ -73,12 +73,12 @@ class SearchFilterCriteria(BaseModel):
 
 class QueryPlanGenerateRequest(BaseModel):
     productName: str = Field(..., min_length=1, max_length=200)
-    productDescription: str = Field(..., min_length=1, max_length=4000)
-    targetAudience: str = Field(default="", max_length=2000)
-    sellingPoints: str = Field(default="", max_length=2000)
-    competitors: str = Field(default="", max_length=2000)
-    commentRequirements: str = Field(default="", max_length=3000)
-    forbiddenTopics: str = Field(default="", max_length=2000)
+    productDescription: str = Field(..., min_length=1, max_length=40000)
+    targetAudience: str = Field(default="", max_length=20000)
+    sellingPoints: str = Field(default="", max_length=20000)
+    competitors: str = Field(default="", max_length=20000)
+    commentRequirements: str = Field(default="", max_length=30000)
+    forbiddenTopics: str = Field(default="", max_length=20000)
     desiredQueryCount: int = Field(default=12, ge=1, le=20)
 
 
