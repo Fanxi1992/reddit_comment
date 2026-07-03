@@ -15,4 +15,5 @@ backend/data/crawl_outputs/
 /node_modules
 /dist
 
+testfirefox.py
 
