@@ -169,7 +169,7 @@ export default function App() {
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex w-full max-w-[1600px] flex-wrap items-center justify-between gap-3 px-4 py-3 lg:px-6">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight text-slate-950">Reddit 洞察分析台</h1>
+            <h1 className="text-xl font-semibold tracking-tight text-slate-950">Reddit评论智能生成系统</h1>
             <p className="mt-1 text-sm text-slate-500">
               {appMode === 'url-analysis'
                 ? '批量帖子解析 · Gemini 多模态分析 · 实时结果流'
