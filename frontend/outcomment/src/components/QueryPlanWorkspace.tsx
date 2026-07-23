@@ -75,8 +75,16 @@ const DEFAULT_SEARCH_FILTER_INPUTS = {
 
 type UrlSourceMode = 'search' | 'manual' | 'crawl-search' | 'crawl-manual'
 
-export function QueryPlanWorkspace() {
-  const [urlSourceMode, setUrlSourceMode] = useState<UrlSourceMode>('search')
+type QueryPlanBusinessMode = 'word-of-mouth' | 'crawl-only'
+
+type QueryPlanWorkspaceProps = {
+  businessMode: QueryPlanBusinessMode
+}
+
+export function QueryPlanWorkspace({ businessMode }: QueryPlanWorkspaceProps) {
+  const [urlSourceMode, setUrlSourceMode] = useState<UrlSourceMode>(() =>
+    businessMode === 'crawl-only' ? 'crawl-search' : 'search',
+  )
   const [context, setContext] = useState<ProductContext>(DEFAULT_CONTEXT)
   const [queries, setQueries] = useState<PlannedQuery[]>([])
   const [crawlQueries, setCrawlQueries] = useState<PlannedQuery[]>(
@@ -132,6 +140,16 @@ export function QueryPlanWorkspace() {
   const isCrawlSearchMode = urlSourceMode === 'crawl-search'
   const isCrawlManualMode = urlSourceMode === 'crawl-manual'
   const usesSearchFilter = isCommentSearchMode || isCrawlSearchMode
+  const sourceModeOptions: Array<{ value: UrlSourceMode; label: string }> =
+    businessMode === 'crawl-only'
+      ? [
+          { value: 'crawl-search', label: '模拟搜索' },
+          { value: 'crawl-manual', label: '手动导入 URL' },
+        ]
+      : [
+          { value: 'search', label: 'AI 裂解搜索' },
+          { value: 'manual', label: '手动导入 URL' },
+        ]
 
   const resetSearchState = () => {
     searchAbortRef.current?.abort()
@@ -436,7 +454,12 @@ export function QueryPlanWorkspace() {
   }
 
   return (
-    <div className="mx-auto grid w-full max-w-[1600px] gap-4 px-4 py-3 lg:grid-cols-[400px_minmax(0,1fr)] lg:px-6">
+    <div
+      className={`mx-auto grid w-full max-w-[1600px] gap-4 px-4 py-3 lg:px-6 ${
+        businessMode === 'word-of-mouth' ? 'lg:grid-cols-[400px_minmax(0,1fr)]' : ''
+      }`}
+    >
+      {businessMode === 'word-of-mouth' ? (
       <aside className="min-w-0 space-y-2.5 rounded-md border border-slate-200 bg-white p-3 shadow-sm lg:sticky lg:top-3 lg:max-h-[calc(100vh-104px)] lg:overflow-y-auto">
         <div>
           <h2 className="text-base font-semibold text-slate-950">产品上下文</h2>
@@ -537,6 +560,7 @@ export function QueryPlanWorkspace() {
           </>
         )}
       </aside>
+      ) : null}
 
       <section className="min-w-0 space-y-4">
         <div className="rounded-md border border-slate-200 bg-white p-3.5 shadow-sm">
@@ -545,13 +569,8 @@ export function QueryPlanWorkspace() {
               <h2 className="text-base font-semibold text-slate-950">URL 来源</h2>
               <p className="mt-1 text-sm text-slate-500">选择 URL 获取方式和后续处理目标。</p>
             </div>
-            <div className="grid grid-cols-2 rounded-md bg-slate-100 p-0.5 xl:grid-cols-4">
-              {[
-                { value: 'search', label: 'AI 裂解搜索' },
-                { value: 'manual', label: '手动导入 URL' },
-                { value: 'crawl-search', label: '模拟搜索（仅抓取）' },
-                { value: 'crawl-manual', label: '手动导入 URL（仅抓取）' },
-              ].map((option) => (
+            <div className="grid grid-cols-2 rounded-md bg-slate-100 p-0.5">
+              {sourceModeOptions.map((option) => (
                 <button
                   className={`h-9 rounded-md px-3 text-sm font-semibold transition ${
                     urlSourceMode === option.value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-900'

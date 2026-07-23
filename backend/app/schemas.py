@@ -63,6 +63,7 @@ QueryIntent = Literal[
 SearchTimeRange = Literal["week", "month", "all"]
 SearchSort = Literal["relevance"]
 MAX_SEARCH_URL_BUDGET = 120
+MAX_WARMUP_COMMENT_COUNT = 40
 
 
 class SearchFilterCriteria(BaseModel):
@@ -217,6 +218,60 @@ class CrawlOnlySummary(BaseModel):
     successCount: int
     skippedCount: int
     failedCount: int
+
+
+class WarmupCommentRequest(BaseModel):
+    postUrl: HttpUrl
+    customPrompt: str = Field(..., min_length=1, max_length=30_000)
+    commentCount: int = Field(default=20, ge=1, le=MAX_WARMUP_COMMENT_COUNT)
+
+
+class WarmupPostPreview(BaseModel):
+    postUrl: str
+    finalUrl: str | None = None
+    title: str
+    subreddit: str | None = None
+    author: str | None = None
+    flair: str | None = None
+    postType: str | None = None
+    bodyText: str = ""
+    bodyLength: int = 0
+    mediaUrls: list[str] = Field(default_factory=list)
+    upvotes: int | None = None
+    totalCommentCount: int | None = None
+    loadedCommentCount: int = 0
+    includedCommentCount: int = 0
+
+
+class WarmupCommentResult(BaseModel):
+    index: int = Field(..., ge=1, le=MAX_WARMUP_COMMENT_COUNT)
+    text: str = Field(..., min_length=1)
+
+
+class WarmupCommentSummary(BaseModel):
+    requestedCount: int
+    generatedCount: int
+    failedCount: int
+
+
+class WarmupCommentStreamEvent(BaseModel):
+    type: Literal[
+        "task_started",
+        "post_collecting",
+        "post_collected",
+        "generation_started",
+        "comment_generated",
+        "done",
+        "error",
+    ]
+    message: str | None = None
+    requestedCount: int | None = None
+    postUrl: str | None = None
+    post: WarmupPostPreview | None = None
+    index: int | None = None
+    result: WarmupCommentResult | None = None
+    summary: WarmupCommentSummary | None = None
+    results: list[WarmupCommentResult] | None = None
 
 
 def _validate_query_url_budget(queries: list[PlannedQuery], fallback_limit: int) -> None:

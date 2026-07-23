@@ -8,6 +8,7 @@ import { PostPreviewTable } from './components/PostPreviewTable'
 import { ProgressPanel } from './components/ProgressPanel'
 import { QueryPlanWorkspace } from './components/QueryPlanWorkspace'
 import { ResultCard } from './components/ResultCard'
+import { WarmupCommentWorkspace } from './components/WarmupCommentWorkspace'
 import { streamAnalysis } from './lib/api'
 import { downloadAnalysisResults } from './lib/excel'
 import { createPostInput, getSubmittablePosts, normalizeUrl, validatePosts } from './lib/validation'
@@ -20,9 +21,29 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 type BackendStatus = 'checking' | 'online' | 'offline'
 type InputTab = 'manual' | 'excel'
 type AppMode = 'url-analysis' | 'query-plan'
+type BusinessMode = 'word-of-mouth' | 'warmup-comments' | 'crawl-only'
+
+const BUSINESS_MODE_OPTIONS: Array<{ value: BusinessMode; label: string; description: string }> = [
+  {
+    value: 'word-of-mouth',
+    label: '口碑评论',
+    description: '产品上下文 · 搜索外部帖子 · 生成一对一口碑评论',
+  },
+  {
+    value: 'warmup-comments',
+    label: '帖子预热',
+    description: '自有帖子感知 · 自定义提示词 · 批量生成顶层评论',
+  },
+  {
+    value: 'crawl-only',
+    label: '仅抓取',
+    description: '模拟搜索或手动 URL · 抓取 Reddit 帖子与评论语料',
+  },
+]
 
 export default function App() {
   const [appMode] = useState<AppMode>('query-plan')
+  const [businessMode, setBusinessMode] = useState<BusinessMode>('word-of-mouth')
   const [posts, setPosts] = useState<PostInput[]>(() => validatePosts([createPostInput('manual')]))
   const [activeTab, setActiveTab] = useState<InputTab>('manual')
   const [prompt, setPrompt] = useState('')
@@ -173,7 +194,7 @@ export default function App() {
             <p className="mt-1 text-sm text-slate-500">
               {appMode === 'url-analysis'
                 ? '批量帖子解析 · Gemini 多模态分析 · 实时结果流'
-                : '产品上下文 · Reddit 搜索 Query 裂解 · 人工审核'}
+                : BUSINESS_MODE_OPTIONS.find((option) => option.value === businessMode)?.description}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -190,10 +211,41 @@ export default function App() {
             )}
           </div>
         </div>
+        {appMode === 'query-plan' ? (
+          <div className="mx-auto w-full max-w-[1600px] px-4 pb-3 lg:px-6">
+            <nav
+              aria-label="业务模式"
+              className="grid max-w-2xl grid-cols-3 rounded-lg bg-slate-100 p-1"
+            >
+              {BUSINESS_MODE_OPTIONS.map((option) => (
+                <button
+                  aria-pressed={businessMode === option.value}
+                  className={`h-10 rounded-md px-3 text-sm font-semibold transition ${
+                    businessMode === option.value
+                      ? 'bg-white text-slate-950 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                  key={option.value}
+                  onClick={() => setBusinessMode(option.value)}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </nav>
+          </div>
+        ) : null}
       </header>
 
       {appMode === 'query-plan' ? (
-        <QueryPlanWorkspace />
+        businessMode === 'warmup-comments' ? (
+          <WarmupCommentWorkspace />
+        ) : (
+          <QueryPlanWorkspace
+            businessMode={businessMode}
+            key={businessMode}
+          />
+        )
       ) : (
         <div className="mx-auto grid w-full max-w-[1600px] gap-4 px-4 py-4 lg:grid-cols-[340px_minmax(0,1fr)] lg:px-6">
           <aside className="min-w-0 space-y-3 rounded-md border border-slate-200 bg-white p-3 shadow-sm lg:sticky lg:top-4 lg:max-h-[calc(100vh-32px)] lg:overflow-y-auto">

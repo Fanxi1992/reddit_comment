@@ -470,3 +470,74 @@ export type CrawlOnlyStreamEvent =
       type: 'error'
       message: string
     }
+
+export type WarmupCommentRequestPayload = {
+  postUrl: string
+  customPrompt: string
+  commentCount: number
+}
+
+export type WarmupPostPreview = {
+  postUrl: string
+  finalUrl?: string | null
+  title: string
+  subreddit?: string | null
+  author?: string | null
+  flair?: string | null
+  postType?: string | null
+  bodyText: string
+  bodyLength: number
+  mediaUrls: string[]
+  upvotes?: number | null
+  totalCommentCount?: number | null
+  loadedCommentCount: number
+  includedCommentCount: number
+}
+
+export type WarmupCommentResult = {
+  index: number
+  text: string
+}
+
+export type WarmupCommentSummary = {
+  requestedCount: number
+  generatedCount: number
+  failedCount: number
+}
+
+export type WarmupCommentStreamEvent =
+  | {
+      type: 'task_started'
+      requestedCount: number
+      message?: string
+    }
+  | {
+      type: 'post_collecting'
+      postUrl: string
+      message?: string
+    }
+  | {
+      type: 'post_collected'
+      post: WarmupPostPreview
+      message?: string
+    }
+  | {
+      type: 'generation_started'
+      requestedCount: number
+      message?: string
+    }
+  | {
+      type: 'comment_generated'
+      index: number
+      result: WarmupCommentResult
+    }
+  | {
+      type: 'done'
+      summary: WarmupCommentSummary
+      results: WarmupCommentResult[]
+      message?: string
+    }
+  | {
+      type: 'error'
+      message: string
+    }
