@@ -200,6 +200,10 @@ def _limit_comment_tree(comment_tree: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_image_data_urls(detail: dict[str, Any]) -> list[str]:
+    post_type = str(detail.get("post_type") or "").lower()
+    if post_type not in {"image", "gallery"}:
+        return []
+
     image_data_urls = []
     for url in _valid_image_urls(detail.get("media_urls") or [])[:MAX_IMAGES_FOR_OPENROUTER]:
         image_data = download_image_bytes(url)

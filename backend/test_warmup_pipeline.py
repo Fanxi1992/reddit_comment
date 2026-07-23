@@ -15,7 +15,7 @@ from test_warmup_contracts import make_collected_post
 
 class WarmupGeneratorTests(unittest.TestCase):
     @patch("app.comment_decider.download_image_bytes")
-    def test_text_post_with_reddit_media_still_sends_image_context(self, download_image) -> None:
+    def test_text_post_with_reddit_media_does_not_send_image_context(self, download_image) -> None:
         download_image.return_value = {"bytes_data": b"image", "mime_type": "image/png"}
 
         images = build_image_data_urls(
@@ -25,8 +25,8 @@ class WarmupGeneratorTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(len(images), 1)
-        self.assertTrue(images[0].startswith("data:image/png;base64,"))
+        self.assertEqual(images, [])
+        download_image.assert_not_called()
 
     @patch("app.warmup_comment_generator.chat_json_with_images")
     @patch("app.warmup_comment_generator.build_image_data_urls")
