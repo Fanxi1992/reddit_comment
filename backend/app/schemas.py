@@ -1,4 +1,5 @@
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
@@ -64,6 +65,7 @@ SearchTimeRange = Literal["week", "month", "all"]
 SearchSort = Literal["relevance"]
 MAX_SEARCH_URL_BUDGET = 120
 MAX_WARMUP_COMMENT_COUNT = 40
+MAX_WARMUP_POST_COUNT = 40
 
 
 class SearchFilterCriteria(BaseModel):
@@ -221,9 +223,22 @@ class CrawlOnlySummary(BaseModel):
 
 
 class WarmupCommentRequest(BaseModel):
-    postUrl: HttpUrl
+    postUrls: list[HttpUrl] = Field(..., min_length=1, max_length=MAX_WARMUP_POST_COUNT)
     customPrompt: str = Field(..., min_length=1, max_length=30_000)
-    commentCount: int = Field(default=20, ge=1, le=MAX_WARMUP_COMMENT_COUNT)
+    commentsPerPost: int = Field(default=20, ge=1, le=MAX_WARMUP_COMMENT_COUNT)
+
+    @model_validator(mode="after")
+    def validate_reddit_post_urls(self) -> "WarmupCommentRequest":
+        seen: set[str] = set()
+        for url in self.postUrls:
+            value = str(url)
+            if not _is_reddit_post_url(value):
+                raise ValueError("postUrls 只能包含 Reddit 帖子 URL")
+            normalized = value.rstrip("/").lower()
+            if normalized in seen:
+                raise ValueError("postUrls 不能包含重复 URL")
+            seen.add(normalized)
+        return self
 
 
 class WarmupPostPreview(BaseModel):
@@ -244,14 +259,19 @@ class WarmupPostPreview(BaseModel):
 
 
 class WarmupCommentResult(BaseModel):
-    index: int = Field(..., ge=1, le=MAX_WARMUP_COMMENT_COUNT)
+    postIndex: int = Field(..., ge=1, le=MAX_WARMUP_POST_COUNT)
+    postUrl: str
+    commentIndex: int = Field(..., ge=1, le=MAX_WARMUP_COMMENT_COUNT)
     text: str = Field(..., min_length=1)
 
 
 class WarmupCommentSummary(BaseModel):
-    requestedCount: int
-    generatedCount: int
-    failedCount: int
+    totalPosts: int
+    processedPosts: int
+    successfulPosts: int
+    failedPosts: int
+    commentsPerPost: int
+    generatedCommentCount: int
 
 
 class WarmupCommentStreamEvent(BaseModel):
@@ -261,14 +281,18 @@ class WarmupCommentStreamEvent(BaseModel):
         "post_collected",
         "generation_started",
         "comment_generated",
+        "post_completed",
+        "post_failed",
         "done",
         "error",
     ]
     message: str | None = None
-    requestedCount: int | None = None
+    totalPosts: int | None = None
+    commentsPerPost: int | None = None
+    postIndex: int | None = None
     postUrl: str | None = None
     post: WarmupPostPreview | None = None
-    index: int | None = None
+    commentIndex: int | None = None
     result: WarmupCommentResult | None = None
     summary: WarmupCommentSummary | None = None
     results: list[WarmupCommentResult] | None = None
@@ -278,3 +302,14 @@ def _validate_query_url_budget(queries: list[PlannedQuery], fallback_limit: int)
     total_budget = sum(query.targetUrlCount or fallback_limit for query in queries)
     if total_budget > MAX_SEARCH_URL_BUDGET:
         raise ValueError(f"Query URL 抓取数量总和不能超过 {MAX_SEARCH_URL_BUDGET}")
+
+
+def _is_reddit_post_url(value: str) -> bool:
+    parsed = urlsplit(value)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    path = parsed.path.lower()
+    if host == "redd.it" or host.endswith(".redd.it"):
+        return bool(path.strip("/"))
+    if host == "reddit.com" or host.endswith(".reddit.com"):
+        return "/comments/" in path
+    return False

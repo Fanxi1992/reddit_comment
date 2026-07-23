@@ -472,9 +472,9 @@ export type CrawlOnlyStreamEvent =
     }
 
 export type WarmupCommentRequestPayload = {
-  postUrl: string
+  postUrls: string[]
   customPrompt: string
-  commentCount: number
+  commentsPerPost: number
 }
 
 export type WarmupPostPreview = {
@@ -495,41 +495,64 @@ export type WarmupPostPreview = {
 }
 
 export type WarmupCommentResult = {
-  index: number
+  postIndex: number
+  postUrl: string
+  commentIndex: number
   text: string
 }
 
 export type WarmupCommentSummary = {
-  requestedCount: number
-  generatedCount: number
-  failedCount: number
+  totalPosts: number
+  processedPosts: number
+  successfulPosts: number
+  failedPosts: number
+  commentsPerPost: number
+  generatedCommentCount: number
 }
 
 export type WarmupCommentStreamEvent =
   | {
       type: 'task_started'
-      requestedCount: number
+      totalPosts: number
+      commentsPerPost: number
       message?: string
     }
   | {
       type: 'post_collecting'
+      postIndex: number
       postUrl: string
       message?: string
     }
   | {
       type: 'post_collected'
+      postIndex: number
       post: WarmupPostPreview
       message?: string
     }
   | {
       type: 'generation_started'
-      requestedCount: number
+      postIndex: number
+      postUrl: string
+      commentsPerPost: number
       message?: string
     }
   | {
       type: 'comment_generated'
-      index: number
+      postIndex: number
+      commentIndex: number
       result: WarmupCommentResult
+    }
+  | {
+      type: 'post_completed'
+      postIndex: number
+      postUrl: string
+      message?: string
+    }
+  | {
+      type: 'post_failed'
+      postIndex: number
+      postUrl: string
+      message: string
     }
   | {
       type: 'done'
