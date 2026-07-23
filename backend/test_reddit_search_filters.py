@@ -5,15 +5,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-playwright_module = types.ModuleType("playwright")
-sync_api_module = types.ModuleType("playwright.sync_api")
-sync_api_module.Error = Exception
-sync_api_module.Locator = object
-sync_api_module.Page = object
-sync_api_module.TimeoutError = TimeoutError
-sync_api_module.sync_playwright = lambda: None
-sys.modules.setdefault("playwright", playwright_module)
-sys.modules.setdefault("playwright.sync_api", sync_api_module)
+try:
+    import playwright.sync_api  # noqa: F401
+except ModuleNotFoundError:
+    playwright_module = types.ModuleType("playwright")
+    sync_api_module = types.ModuleType("playwright.sync_api")
+    sync_api_module.Error = Exception
+    sync_api_module.Locator = object
+    sync_api_module.Page = object
+    sync_api_module.TimeoutError = TimeoutError
+    sync_api_module.sync_playwright = lambda: None
+    sys.modules.setdefault("playwright", playwright_module)
+    sys.modules.setdefault("playwright.sync_api", sync_api_module)
 
 from app.reddit_searcher import RawSearchResult, SearchResultSelector, evaluate_search_filter_reject_reason, parse_reddit_age_hours
 from app.schemas import SearchFilterCriteria

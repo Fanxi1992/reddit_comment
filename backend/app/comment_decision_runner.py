@@ -423,14 +423,33 @@ class DetailEnvironmentRunner:
                         const hasGallery = Boolean(post.querySelector(
                             "gallery-carousel, shreddit-gallery-carousel"
                         ));
+                        const gallery = post.querySelector("gallery-carousel, shreddit-gallery-carousel");
+                        const galleryPages = gallery
+                            ? Array.from(gallery.querySelectorAll("li[slot^='page-']"))
+                            : [];
+                        const galleryMediaCount = galleryPages.filter((page) => Boolean(page.querySelector(
+                            "figure img.media-lightbox-img[src], "
+                            + "figure img.media-lightbox-img[data-lazy-src], "
+                            + "figure img:not([role='presentation'])[src], "
+                            + "figure img:not([role='presentation'])[data-lazy-src]"
+                        ))).length;
+                        const isGallery = postType.toLowerCase() === "gallery" || hasGallery;
+                        const galleryReady = !isGallery || (
+                            galleryMediaCount > 0
+                            && (galleryPages.length === 0 || galleryMediaCount >= galleryPages.length)
+                        );
                         const bodyText = text(bodyEl);
                         const hasMediaSignal = Boolean(postType || contentHref || mediaContainer || hasImage || hasVideo || hasGallery);
                         const hasTextSignal = Boolean(bodyText || attr(post, "post-title"));
                         return {
                             hasPost: true,
-                            ready: hasMediaSignal || hasTextSignal,
+                            ready: (hasMediaSignal || hasTextSignal) && galleryReady,
                             hasMediaSignal,
                             hasTextSignal,
+                            isGallery,
+                            galleryReady,
+                            galleryPageCount: galleryPages.length,
+                            galleryMediaCount,
                             signature: [
                                 postType,
                                 contentHref,
@@ -438,6 +457,8 @@ class DetailEnvironmentRunner:
                                 hasImage ? "image" : "",
                                 hasVideo ? "video" : "",
                                 hasGallery ? "gallery" : "",
+                                galleryPages.length,
+                                galleryMediaCount,
                                 bodyText.length,
                             ].join("|"),
                         };
@@ -449,6 +470,11 @@ class DetailEnvironmentRunner:
                 continue
 
             if not state.get("hasPost"):
+                time.sleep(0.2)
+                continue
+            if state.get("isGallery"):
+                if state.get("galleryReady"):
+                    return
                 time.sleep(0.2)
                 continue
             if state.get("hasMediaSignal"):

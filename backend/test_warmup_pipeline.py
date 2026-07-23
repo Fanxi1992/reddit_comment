@@ -15,6 +15,25 @@ from test_warmup_contracts import make_collected_post
 
 class WarmupGeneratorTests(unittest.TestCase):
     @patch("app.comment_decider.download_image_bytes")
+    def test_gallery_downloads_only_first_three_images_for_model(self, download_image) -> None:
+        download_image.return_value = {"bytes_data": b"image", "mime_type": "image/jpeg"}
+        media_urls = [f"https://preview.redd.it/gallery-v0-image{index}.jpg" for index in range(1, 11)]
+
+        images = build_image_data_urls(
+            {
+                "post_type": "gallery",
+                "media_urls": media_urls,
+            }
+        )
+
+        self.assertEqual(len(images), 3)
+        self.assertEqual(download_image.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in download_image.call_args_list],
+            media_urls[:3],
+        )
+
+    @patch("app.comment_decider.download_image_bytes")
     def test_text_post_with_reddit_media_does_not_send_image_context(self, download_image) -> None:
         download_image.return_value = {"bytes_data": b"image", "mime_type": "image/png"}
 

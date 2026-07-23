@@ -201,9 +201,37 @@ class PostDetailObservationCollector:
                             }
                         }
                     };
+                    const collectGalleryImages = (root) => {
+                        if (!root || postType !== "gallery") return;
+                        const gallery = first(root, ["gallery-carousel", "shreddit-gallery-carousel"]);
+                        if (!gallery) return;
+                        const selectors = [
+                            "li[slot^='page-'] figure img.media-lightbox-img",
+                            "li[slot^='page-'] figure img:not([role='presentation'])",
+                        ];
+                        const galleryImages = [];
+                        const matched = new Set();
+                        for (const selector of selectors) {
+                            for (const image of gallery.querySelectorAll(selector)) {
+                                if (matched.has(image)) continue;
+                                matched.add(image);
+                                galleryImages.push(image);
+                            }
+                        }
+                        for (const image of galleryImages) {
+                            push(
+                                image.currentSrc
+                                    || image.src
+                                    || attr(image, "src")
+                                    || attr(image, "data-lazy-src"),
+                                fallbackUrls,
+                            );
+                        }
+                    };
                     if (/^https?:\/\/i\.redd\.it\//i.test(contentHref)) push(contentHref, originalUrls);
                     collectFrom(mediaContainer || post, ["zoomable-img img[src]", ".lightboxed-content img[src]"], originalUrls);
                     if (/^https?:\/\/preview\.redd\.it\//i.test(contentHref)) push(contentHref, fallbackUrls);
+                    collectGalleryImages(mediaContainer || post);
                     collectFrom(mediaContainer || post, ["img#post-image[src]", "img.preview-img[src]"], fallbackUrls);
                     if (postType === "gif" || postType === "video") {
                         const player = first(mediaContainer || post, ["shreddit-player[src]", "video[src]"]);
