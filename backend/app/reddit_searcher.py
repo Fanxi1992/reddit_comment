@@ -1230,7 +1230,10 @@ def normalize_post_url(url: str) -> str:
     if not parsed.scheme:
         parsed = urlsplit(f"https://www.reddit.com{value if value.startswith('/') else '/' + value}")
     host = parsed.netloc.lower()
-    if "reddit.com" not in host:
+    if host == "redd.it" or host.endswith(".redd.it"):
+        path = re.sub(r"/+", "/", parsed.path).rstrip("/")
+        return urlunsplit(("https", "redd.it", path, "", "")) if path else ""
+    if host != "reddit.com" and not host.endswith(".reddit.com"):
         return ""
     path = re.sub(r"/+", "/", parsed.path).rstrip("/")
     match = re.match(r"^(/r/[^/]+/comments/[^/]+(?:/[^/]+)?)", path, flags=re.IGNORECASE)

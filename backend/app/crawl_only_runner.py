@@ -53,7 +53,7 @@ def run_crawl_only_stream(payload: CrawlOnlyRequest, stop_event: threading.Event
         }
         search_results, search_metadata = yield from _run_simulated_search(payload, stop_event)
     else:
-        search_results = _build_manual_search_results([str(url) for url in payload.urls or []])
+        search_results = build_manual_search_results([str(url) for url in payload.urls or []])
         search_metadata = {
             "summary": {
                 "totalQueries": 1,
@@ -82,7 +82,11 @@ def run_crawl_only_stream(payload: CrawlOnlyRequest, stop_event: threading.Event
         if stop_event.is_set():
             return
 
-    detail_results = yield from _run_detail_crawl(payload, limited_results, search_metadata, stop_event)
+    detail_results = yield from run_detail_crawl(
+        search_results=limited_results,
+        max_comments_per_post=payload.maxCommentsPerPost,
+        stop_event=stop_event,
+    )
     if stop_event.is_set():
         return
 
@@ -139,10 +143,10 @@ def _run_simulated_search(
     return final_results, metadata
 
 
-def _run_detail_crawl(
-    payload: CrawlOnlyRequest,
+def run_detail_crawl(
+    *,
     search_results: list[RedditSearchResultItem],
-    search_metadata: dict[str, Any],
+    max_comments_per_post: int,
     stop_event: threading.Event,
 ) -> Iterator[dict[str, Any] | list[dict[str, Any]]]:
     profiles = load_adspower_profiles()
@@ -167,7 +171,7 @@ def _run_detail_crawl(
     for index, (profile, chunk) in enumerate(zip(profiles, chunks, strict=False), start=1):
         thread = threading.Thread(
             target=_run_crawl_environment_worker,
-            args=(profile, index, chunk, payload.maxCommentsPerPost, event_queue, stop_event),
+            args=(profile, index, chunk, max_comments_per_post, event_queue, stop_event),
             daemon=True,
         )
         threads.append(thread)
@@ -378,7 +382,7 @@ def _render_comment_subtree(node: dict[str, Any], parent: dict[str, Any] | None,
     return lines
 
 
-def _build_manual_search_results(urls: list[str]) -> list[RedditSearchResultItem]:
+def build_manual_search_results(urls: list[str]) -> list[RedditSearchResultItem]:
     output: list[RedditSearchResultItem] = []
     seen: set[str] = set()
     for url in urls:

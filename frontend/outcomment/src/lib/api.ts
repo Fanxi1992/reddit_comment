@@ -9,6 +9,10 @@ import type {
   RedditSearchRequestPayload,
   RedditSearchStreamEvent,
   StreamEvent,
+  WarmupCollectRequestPayload,
+  WarmupCollectStreamEvent,
+  WarmupCommentRequestPayload,
+  WarmupCommentStreamEvent,
 } from '../types'
 import { toPostPayload } from './validation'
 
@@ -177,6 +181,60 @@ export async function streamCrawlOnly({
       maxCommentsPerPost: payload.maxCommentsPerPost ?? 30,
       perQueryLimit: payload.perQueryLimit ?? 20,
     }),
+    signal,
+  })
+
+  if (!response.ok) {
+    const errorText = await readErrorMessage(response)
+    throw new Error(errorText || `请求失败：${response.status}`)
+  }
+
+  await readNdjsonStream(response, onEvent)
+}
+
+export async function streamWarmupCollection({
+  payload,
+  signal,
+  onEvent,
+}: {
+  payload: WarmupCollectRequestPayload
+  signal?: AbortSignal
+  onEvent: (event: WarmupCollectStreamEvent) => void
+}): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/warmup/collect/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+    },
+    body: JSON.stringify(payload),
+    signal,
+  })
+
+  if (!response.ok) {
+    const errorText = await readErrorMessage(response)
+    throw new Error(errorText || `请求失败：${response.status}`)
+  }
+
+  await readNdjsonStream(response, onEvent)
+}
+
+export async function streamWarmupComments({
+  payload,
+  signal,
+  onEvent,
+}: {
+  payload: WarmupCommentRequestPayload
+  signal?: AbortSignal
+  onEvent: (event: WarmupCommentStreamEvent) => void
+}): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/warmup/comments/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/x-ndjson',
+    },
+    body: JSON.stringify(payload),
     signal,
   })
 

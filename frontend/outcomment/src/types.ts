@@ -471,10 +471,8 @@ export type CrawlOnlyStreamEvent =
       message: string
     }
 
-export type WarmupCommentRequestPayload = {
+export type WarmupCollectRequestPayload = {
   postUrls: string[]
-  customPrompt: string
-  commentsPerPost: number
 }
 
 export type WarmupPostPreview = {
@@ -492,6 +490,60 @@ export type WarmupPostPreview = {
   totalCommentCount?: number | null
   loadedCommentCount: number
   includedCommentCount: number
+}
+
+export type WarmupCollectedPost = WarmupPostPreview & {
+  postIndex: number
+  outboundUrl?: string | null
+  commentTree: Record<string, unknown>
+}
+
+export type WarmupCollectSummary = {
+  totalPosts: number
+  processedPosts: number
+  successfulPosts: number
+  failedPosts: number
+}
+
+export type WarmupCollectStreamEvent =
+  | {
+      type: 'collection_started'
+      totalPosts: number
+      message?: string
+    }
+  | {
+      type: 'post_collecting'
+      postIndex: number
+      postUrl: string
+      message?: string
+    }
+  | {
+      type: 'post_collected'
+      postIndex: number
+      postUrl: string
+      post: WarmupCollectedPost
+      message?: string
+    }
+  | {
+      type: 'post_failed'
+      postIndex: number
+      postUrl: string
+      message: string
+    }
+  | {
+      type: 'done'
+      summary: WarmupCollectSummary
+      posts: WarmupCollectedPost[]
+    }
+  | {
+      type: 'error'
+      message: string
+    }
+
+export type WarmupCommentRequestPayload = {
+  posts: WarmupCollectedPost[]
+  customPrompt: string
+  commentsPerPost: number
 }
 
 export type WarmupCommentResult = {
@@ -518,18 +570,6 @@ export type WarmupCommentStreamEvent =
       message?: string
     }
   | {
-      type: 'post_collecting'
-      postIndex: number
-      postUrl: string
-      message?: string
-    }
-  | {
-      type: 'post_collected'
-      postIndex: number
-      post: WarmupPostPreview
-      message?: string
-    }
-  | {
       type: 'generation_started'
       postIndex: number
       postUrl: string
@@ -546,6 +586,7 @@ export type WarmupCommentStreamEvent =
       type: 'post_completed'
       postIndex: number
       postUrl: string
+      attachedImageCount?: number
       message?: string
     }
   | {

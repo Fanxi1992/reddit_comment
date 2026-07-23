@@ -64,7 +64,7 @@ def generate_comment_decision(
     raw_decision = chat_json_with_images(
         model=get_openrouter_comment_model(),
         prompt=_build_prompt(product_context, search_result, detail, allowed_targets, comment_length_style),
-        image_data_urls=_build_image_data_urls(detail),
+        image_data_urls=build_image_data_urls(detail),
         schema_name="comment_decision",
         schema=COMMENT_DECISION_SCHEMA,
         timeout_seconds=OPENROUTER_TIMEOUT_SECONDS,
@@ -109,7 +109,7 @@ def _build_prompt(
             "forbidden_topics": product_context.forbiddenTopics,
         },
         "source_search_result": search_result.model_dump(),
-        "post_detail": _limited_detail_for_prompt(detail),
+        "post_detail": limited_detail_for_prompt(detail),
         "allowed_comment_targets": allowed_targets,
         "comment_length_guidance": _comment_length_guidance(comment_length_style),
         "output_examples": [
@@ -155,7 +155,7 @@ def _comment_length_guidance(style: str) -> dict[str, str]:
     return guidance.get(style, guidance["medium"])
 
 
-def _limited_detail_for_prompt(detail: dict[str, Any]) -> dict[str, Any]:
+def limited_detail_for_prompt(detail: dict[str, Any]) -> dict[str, Any]:
     limited = dict(detail)
     body_text = str(limited.get("body_text") or "")
     limited["body_text"] = body_text[:MAX_BODY_CHARS]
@@ -199,11 +199,7 @@ def _limit_comment_tree(comment_tree: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_image_data_urls(detail: dict[str, Any]) -> list[str]:
-    post_type = str(detail.get("post_type") or "").lower()
-    if post_type not in {"image", "gallery"}:
-        return []
-
+def build_image_data_urls(detail: dict[str, Any]) -> list[str]:
     image_data_urls = []
     for url in _valid_image_urls(detail.get("media_urls") or [])[:MAX_IMAGES_FOR_OPENROUTER]:
         image_data = download_image_bytes(url)

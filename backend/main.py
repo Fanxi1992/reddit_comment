@@ -21,13 +21,18 @@ from app.schemas import (
     QueryPlanGenerateRequest,
     QueryPlanGenerateResponse,
     RedditSearchRequest,
+    WarmupCollectRequest,
+    WarmupCommentRequest,
 )
+from app.warmup_comment_runner import encode_ndjson as encode_warmup_ndjson
+from app.warmup_comment_runner import run_warmup_collection_stream, run_warmup_comment_stream
 
 
 MAX_CONCURRENT_ANALYSES = 3
 MAX_CONCURRENT_REDDIT_SEARCHES = 1
 MAX_CONCURRENT_COMMENT_DECISIONS = 1
 MAX_CONCURRENT_CRAWL_ONLY_TASKS = 1
+MAX_CONCURRENT_WARMUP_GENERATIONS = 2
 
 
 class AnalysisTaskLimiter:
@@ -50,8 +55,10 @@ class AnalysisTaskLimiter:
 
 task_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_ANALYSES)
 reddit_search_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_REDDIT_SEARCHES)
-comment_decision_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_COMMENT_DECISIONS)
-crawl_only_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_CRAWL_ONLY_TASKS)
+detail_browser_limiter = AnalysisTaskLimiter(
+    min(MAX_CONCURRENT_COMMENT_DECISIONS, MAX_CONCURRENT_CRAWL_ONLY_TASKS)
+)
+warmup_generation_limiter = AnalysisTaskLimiter(MAX_CONCURRENT_WARMUP_GENERATIONS)
 
 
 app = FastAPI(title="Reddit Insight Analyzer API")
@@ -133,8 +140,8 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
 
 @app.post("/api/comment-decisions/stream")
 async def stream_comment_decisions(payload: CommentDecisionRequest, request: Request) -> StreamingResponse:
-    if not comment_decision_limiter.try_acquire():
-        raise HTTPException(status_code=429, detail="当前已有评论决策任务正在运行，ADSpower环境数量有限，请稍等十分钟再试")
+    if not detail_browser_limiter.try_acquire():
+        raise HTTPException(status_code=429, detail="当前已有帖子详情读取任务正在运行，AdsPower 环境数量有限，请稍后再试")
 
     async def stream_with_release():
         stop_event = threading.Event()
@@ -164,7 +171,7 @@ async def stream_comment_decisions(payload: CommentDecisionRequest, request: Req
             stop_event.set()
             if producer_thread is not None and producer_thread.is_alive():
                 await _join_thread_until_done(producer_thread)
-            comment_decision_limiter.release()
+            detail_browser_limiter.release()
 
     return StreamingResponse(
         stream_with_release(),
@@ -175,8 +182,8 @@ async def stream_comment_decisions(payload: CommentDecisionRequest, request: Req
 
 @app.post("/api/crawl-only/stream")
 async def stream_crawl_only(payload: CrawlOnlyRequest, request: Request) -> StreamingResponse:
-    if not crawl_only_limiter.try_acquire():
-        raise HTTPException(status_code=429, detail="当前已有仅抓取任务正在运行，ADSpower环境数量有限，请稍等十分钟再试")
+    if not detail_browser_limiter.try_acquire():
+        raise HTTPException(status_code=429, detail="当前已有帖子详情读取任务正在运行，AdsPower 环境数量有限，请稍后再试")
 
     async def stream_with_release():
         stop_event = threading.Event()
@@ -206,7 +213,89 @@ async def stream_crawl_only(payload: CrawlOnlyRequest, request: Request) -> Stre
             stop_event.set()
             if producer_thread is not None and producer_thread.is_alive():
                 await _join_thread_until_done(producer_thread)
-            crawl_only_limiter.release()
+            detail_browser_limiter.release()
+
+    return StreamingResponse(
+        stream_with_release(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/warmup/collect/stream")
+async def stream_warmup_collection(payload: WarmupCollectRequest, request: Request) -> StreamingResponse:
+    if not detail_browser_limiter.try_acquire():
+        raise HTTPException(status_code=429, detail="当前已有帖子详情读取任务正在运行，请稍后再试")
+
+    async def stream_with_release():
+        stop_event = threading.Event()
+        producer_thread = None
+        try:
+            event_queue: queue.Queue[dict | None] = queue.Queue()
+            producer_thread = threading.Thread(
+                target=_produce_stream_events,
+                args=(run_warmup_collection_stream(payload, stop_event=stop_event), event_queue),
+                daemon=True,
+            )
+            producer_thread.start()
+            while True:
+                if await request.is_disconnected():
+                    stop_event.set()
+                    return
+                event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
+                if event is _QUEUE_TIMEOUT:
+                    continue
+                if event is None:
+                    return
+                yield encode_warmup_ndjson(event)
+        except Exception as exc:
+            yield encode_warmup_ndjson({"type": "error", "message": f"批量帖子读取失败: {exc}"})
+        finally:
+            stop_event.set()
+            if producer_thread is not None and producer_thread.is_alive():
+                await _join_thread_until_done(producer_thread)
+            detail_browser_limiter.release()
+
+    return StreamingResponse(
+        stream_with_release(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/warmup/comments/stream")
+async def stream_warmup_comments(payload: WarmupCommentRequest, request: Request) -> StreamingResponse:
+    if not warmup_generation_limiter.try_acquire():
+        raise HTTPException(status_code=429, detail="当前帖子预热生成任务较多，请稍后再试")
+
+    async def stream_with_release():
+        stop_event = threading.Event()
+        producer_thread = None
+        try:
+            event_queue: queue.Queue[dict | None] = queue.Queue()
+            producer_thread = threading.Thread(
+                target=_produce_stream_events,
+                args=(run_warmup_comment_stream(payload, stop_event=stop_event), event_queue),
+                daemon=True,
+            )
+            producer_thread.start()
+            while True:
+                if await request.is_disconnected():
+                    stop_event.set()
+                    return
+                event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
+                if event is _QUEUE_TIMEOUT:
+                    continue
+                if event is None:
+                    return
+                yield encode_warmup_ndjson(event)
+        except Exception as exc:
+            yield encode_warmup_ndjson({"type": "error", "message": f"批量预热评论生成失败: {exc}"})
+        finally:
+            stop_event.set()
+            if producer_thread is not None and producer_thread.is_alive():
+                await _join_thread_until_done(producer_thread)
+            warmup_generation_limiter.release()
 
     return StreamingResponse(
         stream_with_release(),

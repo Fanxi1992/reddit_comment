@@ -222,13 +222,11 @@ class CrawlOnlySummary(BaseModel):
     failedCount: int
 
 
-class WarmupCommentRequest(BaseModel):
+class WarmupCollectRequest(BaseModel):
     postUrls: list[HttpUrl] = Field(..., min_length=1, max_length=MAX_WARMUP_POST_COUNT)
-    customPrompt: str = Field(..., min_length=1, max_length=30_000)
-    commentsPerPost: int = Field(default=20, ge=1, le=MAX_WARMUP_COMMENT_COUNT)
 
     @model_validator(mode="after")
-    def validate_reddit_post_urls(self) -> "WarmupCommentRequest":
+    def validate_reddit_post_urls(self) -> "WarmupCollectRequest":
         seen: set[str] = set()
         for url in self.postUrls:
             value = str(url)
@@ -244,25 +242,77 @@ class WarmupCommentRequest(BaseModel):
 class WarmupPostPreview(BaseModel):
     postUrl: str
     finalUrl: str | None = None
-    title: str
+    title: str = Field(..., min_length=1, max_length=1000)
     subreddit: str | None = None
     author: str | None = None
     flair: str | None = None
     postType: str | None = None
-    bodyText: str = ""
+    bodyText: str = Field(default="", max_length=60_000)
     bodyLength: int = 0
-    mediaUrls: list[str] = Field(default_factory=list)
+    mediaUrls: list[str] = Field(default_factory=list, max_length=20)
     upvotes: int | None = None
     totalCommentCount: int | None = None
     loadedCommentCount: int = 0
     includedCommentCount: int = 0
 
 
+class WarmupCollectedPost(WarmupPostPreview):
+    postIndex: int = Field(..., ge=1, le=MAX_WARMUP_POST_COUNT)
+    outboundUrl: str | None = None
+    commentTree: dict = Field(default_factory=dict)
+
+
+class WarmupCollectSummary(BaseModel):
+    totalPosts: int
+    processedPosts: int
+    successfulPosts: int
+    failedPosts: int
+
+
+class WarmupCollectStreamEvent(BaseModel):
+    type: Literal[
+        "collection_started",
+        "post_collecting",
+        "post_collected",
+        "post_failed",
+        "done",
+        "error",
+    ]
+    message: str | None = None
+    totalPosts: int | None = None
+    postIndex: int | None = None
+    postUrl: str | None = None
+    post: WarmupCollectedPost | None = None
+    summary: WarmupCollectSummary | None = None
+    posts: list[WarmupCollectedPost] | None = None
+
+
+class WarmupCommentRequest(BaseModel):
+    posts: list[WarmupCollectedPost] = Field(..., min_length=1, max_length=MAX_WARMUP_POST_COUNT)
+    customPrompt: str = Field(..., min_length=1, max_length=30_000)
+    commentsPerPost: int = Field(default=20, ge=1, le=MAX_WARMUP_COMMENT_COUNT)
+
+    @model_validator(mode="after")
+    def validate_unique_posts(self) -> "WarmupCommentRequest":
+        self.customPrompt = self.customPrompt.strip()
+        if not self.customPrompt:
+            raise ValueError("customPrompt 不能为空")
+        if any(not _is_reddit_post_url(post.postUrl) for post in self.posts):
+            raise ValueError("posts 只能包含 Reddit 帖子")
+        normalized_urls = [post.postUrl.rstrip("/").lower() for post in self.posts]
+        if len(normalized_urls) != len(set(normalized_urls)):
+            raise ValueError("posts 不能包含重复帖子")
+        post_indexes = [post.postIndex for post in self.posts]
+        if len(post_indexes) != len(set(post_indexes)):
+            raise ValueError("posts 不能包含重复 postIndex")
+        return self
+
+
 class WarmupCommentResult(BaseModel):
     postIndex: int = Field(..., ge=1, le=MAX_WARMUP_POST_COUNT)
     postUrl: str
     commentIndex: int = Field(..., ge=1, le=MAX_WARMUP_COMMENT_COUNT)
-    text: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=10_000)
 
 
 class WarmupCommentSummary(BaseModel):
@@ -277,8 +327,6 @@ class WarmupCommentSummary(BaseModel):
 class WarmupCommentStreamEvent(BaseModel):
     type: Literal[
         "task_started",
-        "post_collecting",
-        "post_collected",
         "generation_started",
         "comment_generated",
         "post_completed",
@@ -293,6 +341,7 @@ class WarmupCommentStreamEvent(BaseModel):
     postUrl: str | None = None
     post: WarmupPostPreview | None = None
     commentIndex: int | None = None
+    attachedImageCount: int | None = None
     result: WarmupCommentResult | None = None
     summary: WarmupCommentSummary | None = None
     results: list[WarmupCommentResult] | None = None

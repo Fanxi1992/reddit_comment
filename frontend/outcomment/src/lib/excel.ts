@@ -7,6 +7,8 @@ import type {
   ProductContext,
   RedditSearchResultItem,
   ResultItem,
+  WarmupCollectedPost,
+  WarmupCommentResult,
 } from '../types'
 import { createPostInput, validatePosts } from './validation'
 
@@ -198,6 +200,39 @@ export function downloadCommentDecisionsCsv(results: CommentDecisionResult[]): v
   URL.revokeObjectURL(url)
 }
 
+export function downloadWarmupCommentsXlsx(
+  posts: WarmupCollectedPost[],
+  results: WarmupCommentResult[],
+): void {
+  const worksheet = XLSX.utils.json_to_sheet(buildWarmupCommentRows(posts, results), {
+    header: ['postIndex', 'postUrl', 'postTitle', 'commentIndex', 'commentText'],
+  })
+  worksheet['!cols'] = [{ wch: 12 }, { wch: 84 }, { wch: 56 }, { wch: 14 }, { wch: 120 }]
+
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Warmup Comments')
+  XLSX.writeFile(workbook, `reddit-warmup-comments-${formatDateForFileName(new Date())}.xlsx`)
+}
+
+export function downloadWarmupCommentsCsv(
+  posts: WarmupCollectedPost[],
+  results: WarmupCommentResult[],
+): void {
+  const worksheet = XLSX.utils.json_to_sheet(buildWarmupCommentRows(posts, results), {
+    header: ['postIndex', 'postUrl', 'postTitle', 'commentIndex', 'commentText'],
+  })
+  const csv = XLSX.utils.sheet_to_csv(worksheet)
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `reddit-warmup-comments-${formatDateForFileName(new Date())}.csv`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
 function buildSearchResultRows(productContext: ProductContext, results: RedditSearchResultItem[]) {
   return results.map((result) => ({
     产品名称: productContext.productName,
@@ -224,6 +259,19 @@ function buildCommentDecisionRows(results: CommentDecisionResult[]) {
     .map((result) => ({
       commentUrl: result.commentUrl,
       commentText: result.commentText,
+    }))
+}
+
+function buildWarmupCommentRows(posts: WarmupCollectedPost[], results: WarmupCommentResult[]) {
+  const titles = new Map(posts.map((post) => [post.postIndex, post.title]))
+  return [...results]
+    .sort((left, right) => left.postIndex - right.postIndex || left.commentIndex - right.commentIndex)
+    .map((result) => ({
+      postIndex: result.postIndex,
+      postUrl: result.postUrl,
+      postTitle: titles.get(result.postIndex) ?? '',
+      commentIndex: result.commentIndex,
+      commentText: result.text,
     }))
 }
 
