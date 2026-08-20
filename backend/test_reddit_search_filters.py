@@ -24,7 +24,10 @@ from app.reddit_searcher import (
     AdsPowerSettings,
     QuerySearchResult,
     RawSearchResult,
+    RedditSearchDiagnosticError,
     RedditSearchRunner,
+    SearchCollectionOutcome,
+    SearchNavigationOutcome,
     SearchResultSelector,
     build_reddit_search_url,
     evaluate_search_filter_reject_reason,
@@ -166,14 +169,37 @@ class RedditSearchUrlTests(unittest.TestCase):
 
 
 class FakeNavigationPage:
-    def __init__(self, final_url: str | None = None) -> None:
+    def __init__(
+        self,
+        final_url: str | None = None,
+        *,
+        response_status: int | None = None,
+        body_text: str = "",
+        title_text: str = "",
+        goto_error: Exception | None = None,
+    ) -> None:
         self.url = "about:blank"
         self.final_url = final_url
+        self.response_status = response_status
+        self.body_text = body_text
+        self.title_text = title_text
+        self.goto_error = goto_error
         self.goto_calls: list[tuple[str, str, int]] = []
 
-    def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
+    def goto(self, url: str, *, wait_until: str, timeout: int):
         self.goto_calls.append((url, wait_until, timeout))
         self.url = self.final_url or url
+        if self.goto_error:
+            raise self.goto_error
+        if self.response_status is None:
+            return None
+        return types.SimpleNamespace(status=self.response_status)
+
+    def evaluate(self, script: str):
+        return {"text": self.body_text, "title": self.title_text}
+
+    def close(self) -> None:
+        return None
 
 
 class RedditSearchNavigationTests(unittest.TestCase):
@@ -192,7 +218,7 @@ class RedditSearchNavigationTests(unittest.TestCase):
         page = FakeNavigationPage()
 
         with patch.object(runner, "_settle_page") as settle_page:
-            final_url = runner._navigate_to_search_results_page(
+            navigation = runner._navigate_to_search_results_page(
                 page,
                 "what is the best man",
                 search_sort="relevance",
@@ -203,7 +229,9 @@ class RedditSearchNavigationTests(unittest.TestCase):
             "https://www.reddit.com/search/?q=what+is+the+best+man"
             "&type=posts&sort=relevance&t=week"
         )
-        self.assertEqual(final_url, expected_url)
+        self.assertEqual(navigation.attempted_url, expected_url)
+        self.assertEqual(navigation.final_url, expected_url)
+        self.assertEqual(navigation.page_state, "ready")
         self.assertEqual(
             page.goto_calls,
             [(expected_url, "domcontentloaded", REDDIT_SEARCH_NAVIGATION_TIMEOUT_MS)],
@@ -216,7 +244,7 @@ class RedditSearchNavigationTests(unittest.TestCase):
 
         with patch.object(runner, "_settle_page"), self.assertRaisesRegex(
             RuntimeError,
-            "unexpected_reddit_search_url",
+            "reddit_unexpected_redirect",
         ):
             runner._navigate_to_search_results_page(
                 page,
@@ -224,6 +252,174 @@ class RedditSearchNavigationTests(unittest.TestCase):
                 search_sort="relevance",
                 search_time="month",
             )
+
+    def test_classifies_rate_limit_from_http_status(self) -> None:
+        runner = self.make_runner()
+        page = FakeNavigationPage(response_status=429)
+
+        with patch.object(runner, "_settle_page"), self.assertRaises(RedditSearchDiagnosticError) as raised:
+            runner._navigate_to_search_results_page(
+                page,
+                "test query",
+                search_sort="relevance",
+                search_time="week",
+            )
+
+        self.assertEqual(raised.exception.code, "reddit_rate_limited")
+        self.assertIn("q=test+query", raised.exception.attempted_url)
+        self.assertEqual(raised.exception.final_url, raised.exception.attempted_url)
+
+    def test_classifies_reddit_service_error_from_http_status(self) -> None:
+        runner = self.make_runner()
+        page = FakeNavigationPage(response_status=503)
+
+        with patch.object(runner, "_settle_page"), self.assertRaises(RedditSearchDiagnosticError) as raised:
+            runner._navigate_to_search_results_page(
+                page,
+                "test query",
+                search_sort="relevance",
+                search_time="week",
+            )
+
+        self.assertEqual(raised.exception.code, "reddit_unavailable")
+
+    def test_navigation_timeout_keeps_attempted_and_final_urls(self) -> None:
+        runner = self.make_runner()
+        page = FakeNavigationPage(
+            final_url="https://www.reddit.com/search/?q=test+query&type=posts&sort=relevance&t=week",
+            goto_error=TimeoutError("navigation timed out"),
+        )
+
+        with self.assertRaises(RedditSearchDiagnosticError) as raised:
+            runner._navigate_to_search_results_page(
+                page,
+                "test query",
+                search_sort="relevance",
+                search_time="week",
+            )
+
+        self.assertEqual(raised.exception.code, "reddit_navigation_timeout")
+        self.assertEqual(raised.exception.attempted_url, raised.exception.final_url)
+
+    def test_classifies_login_redirect_and_security_challenge(self) -> None:
+        runner = self.make_runner()
+        cases = [
+            (FakeNavigationPage(final_url="https://www.reddit.com/login/"), "reddit_login_required"),
+            (FakeNavigationPage(body_text="Please verify you are human"), "reddit_security_challenge"),
+        ]
+
+        for page, expected_code in cases:
+            with self.subTest(expected_code=expected_code), patch.object(runner, "_settle_page"), self.assertRaises(
+                RedditSearchDiagnosticError
+            ) as raised:
+                runner._navigate_to_search_results_page(
+                    page,
+                    "test query",
+                    search_sort="relevance",
+                    search_time="week",
+                )
+            self.assertEqual(raised.exception.code, expected_code)
+
+    def test_collect_query_preserves_urls_for_navigation_failure(self) -> None:
+        runner = self.make_runner()
+        page = FakeNavigationPage()
+        runner._context = types.SimpleNamespace(new_page=lambda: page)
+        attempted_url = build_reddit_search_url(
+            runner.settings.target_url,
+            "test query",
+            search_sort="relevance",
+            search_time="week",
+        )
+        failure = RedditSearchDiagnosticError(
+            "reddit_navigation_timeout",
+            attempted_url=attempted_url,
+            final_url="https://www.reddit.com/",
+            elapsed_ms=20_000,
+            page_state="ready",
+        )
+
+        with patch.object(runner, "_navigate_to_search_results_page", side_effect=failure):
+            result = runner.collect_query(
+                "test query",
+                query_index=1,
+                search_sort="relevance",
+                search_time="week",
+                target_count=1,
+                search_filter=None,
+                max_scan_count=10,
+            )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.error_code, "reddit_navigation_timeout")
+        self.assertEqual(result.attempted_search_url, attempted_url)
+        self.assertEqual(result.final_url, "https://www.reddit.com/")
+        self.assertEqual(result.navigation_elapsed_ms, 20_000)
+
+    def test_distinguishes_empty_results_from_unrecognized_result_dom(self) -> None:
+        runner = self.make_runner()
+        page = FakeNavigationPage()
+        runner._context = types.SimpleNamespace(new_page=lambda: page)
+        search_url = build_reddit_search_url(
+            runner.settings.target_url,
+            "test query",
+            search_sort="relevance",
+            search_time="week",
+        )
+        navigation = SearchNavigationOutcome(search_url, search_url, 12)
+        empty_outcome = SearchCollectionOutcome([], 0, 0, {}, False)
+        page.url = search_url
+
+        with (
+            patch.object(runner, "_navigate_to_search_results_page", return_value=navigation),
+            patch.object(runner, "_collect_search_results_until_target", return_value=empty_outcome),
+            patch.object(runner, "_is_no_results_page", return_value=False),
+            patch.object(runner, "_inspect_reddit_page_state", return_value="ready"),
+            patch.object(runner, "_visible_reddit_post_link_count", return_value=2),
+        ):
+            result = runner.collect_query(
+                "test query",
+                search_sort="relevance",
+                search_time="week",
+                target_count=1,
+                search_filter=None,
+                max_scan_count=10,
+            )
+
+        self.assertEqual(result.error_code, "reddit_result_dom_unrecognized")
+        self.assertIn("页面结构已变化", result.error_message)
+
+    def test_identifies_a_legitimate_empty_results_page(self) -> None:
+        runner = self.make_runner()
+        page = FakeNavigationPage()
+        runner._context = types.SimpleNamespace(new_page=lambda: page)
+        search_url = build_reddit_search_url(
+            runner.settings.target_url,
+            "no matching query",
+            search_sort="relevance",
+            search_time="month",
+        )
+        page.url = search_url
+        navigation = SearchNavigationOutcome(search_url, search_url, 10)
+        empty_outcome = SearchCollectionOutcome([], 0, 0, {}, False)
+
+        with (
+            patch.object(runner, "_navigate_to_search_results_page", return_value=navigation),
+            patch.object(runner, "_collect_search_results_until_target", return_value=empty_outcome),
+            patch.object(runner, "_is_no_results_page", return_value=True),
+        ):
+            result = runner.collect_query(
+                "no matching query",
+                search_sort="relevance",
+                search_time="month",
+                target_count=1,
+                search_filter=None,
+                max_scan_count=10,
+            )
+
+        self.assertEqual(result.status, "no_results")
+        self.assertEqual(result.error_code, "reddit_no_results")
+        self.assertEqual(result.attempted_search_url, search_url)
+        self.assertEqual(result.final_url, search_url)
 
 
 class RedditSearchBatchPropagationTests(unittest.TestCase):
@@ -242,12 +438,22 @@ class RedditSearchBatchPropagationTests(unittest.TestCase):
 
             def collect_query(self, query: str, **kwargs) -> QuerySearchResult:
                 calls.append({"query": query, **kwargs})
+                search_url = (
+                    "https://www.reddit.com/search/?q=test+query"
+                    "&type=posts&sort=relevance&t=month"
+                )
                 return QuerySearchResult(
                     status="no_results",
-                    reason="no_results",
-                    search_results_url="https://www.reddit.com/search/",
+                    reason="reddit_no_results",
+                    search_results_url=search_url,
                     results=[],
                     raw_url_count=0,
+                    error_code="reddit_no_results",
+                    error_message="Reddit 搜索没有返回结果",
+                    attempted_search_url=search_url,
+                    final_url=search_url,
+                    navigation_elapsed_ms=25,
+                    page_state="ready",
                 )
 
         payload = RedditSearchRequest(
@@ -288,6 +494,7 @@ class RedditSearchBatchPropagationTests(unittest.TestCase):
             [
                 {
                     "query": "test query",
+                    "query_index": 1,
                     "search_sort": "relevance",
                     "search_time": "month",
                     "target_count": 3,
@@ -296,7 +503,63 @@ class RedditSearchBatchPropagationTests(unittest.TestCase):
                 }
             ],
         )
+        query_result_event = next(event for event in events if event["type"] == "query_result")
+        self.assertEqual(query_result_event["environmentId"], "env-1")
+        self.assertEqual(query_result_event["environmentIndex"], 1)
+        self.assertEqual(query_result_event["errorCode"], "reddit_no_results")
+        self.assertEqual(query_result_event["errorMessage"], "Reddit 搜索没有返回结果")
+        self.assertEqual(query_result_event["navigationElapsedMs"], 25)
+        self.assertEqual(query_result_event["pageState"], "ready")
+        self.assertEqual(query_result_event["attemptedSearchUrl"], query_result_event["finalUrl"])
         self.assertEqual(events[-1]["type"], "done")
+
+    def test_environment_start_failure_is_returned_as_a_structured_query_error(self) -> None:
+        class FailingRunner:
+            def __init__(self, settings: AdsPowerSettings) -> None:
+                self.settings = settings
+
+            def __enter__(self):
+                raise RuntimeError("adspower_browser_start_failed:test failure")
+
+            def __exit__(self, exc_type, exc, traceback) -> None:
+                return None
+
+        payload = RedditSearchRequest(
+            productContext=QueryPlanGenerateRequest(
+                productName="Test product",
+                productDescription="Test description",
+            ),
+            queries=[
+                PlannedQuery(
+                    query="test query",
+                    intent="other",
+                    reason="Regression test",
+                    priority=1,
+                    suggestedTimeRange="week",
+                    targetUrlCount=1,
+                )
+            ],
+            searchSort="relevance",
+        )
+        settings = AdsPowerSettings(
+            api_url="http://127.0.0.1:50325",
+            api_key="test-key",
+            user_id="test-user",
+        )
+
+        with (
+            patch("app.reddit_searcher.load_adspower_search_profiles", return_value=[settings]),
+            patch("app.reddit_searcher.RedditSearchRunner", FailingRunner),
+            patch("app.reddit_searcher._load_search_env_concurrency", return_value=1),
+            patch("app.reddit_searcher._load_search_queries_per_env", return_value=1),
+        ):
+            events = list(run_reddit_search_batch(payload))
+
+        query_result_event = next(event for event in events if event["type"] == "query_result")
+        self.assertEqual(query_result_event["status"], "failed")
+        self.assertEqual(query_result_event["errorCode"], "adspower_browser_start_failed")
+        self.assertEqual(query_result_event["errorMessage"], "AdsPower 浏览器环境启动失败")
+        self.assertIn("q=test+query", query_result_event["attemptedSearchUrl"])
 
 
 class RedditSearchFilterTests(unittest.TestCase):

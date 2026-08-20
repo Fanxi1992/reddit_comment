@@ -184,6 +184,10 @@ export type RedditSearchStreamEvent =
       query: string
       timeRange: SuggestedTimeRange
       targetUrlCount?: number
+      environmentId?: string
+      environmentIndex?: number
+      searchSort?: 'relevance'
+      attemptedSearchUrl?: string
     }
   | {
       type: 'query_result'
@@ -192,7 +196,15 @@ export type RedditSearchStreamEvent =
       targetUrlCount?: number
       status: Exclude<RedditSearchStatus, 'pending' | 'running'>
       reason: string
+      errorCode?: string
+      errorMessage?: string
       searchResultsUrl: string
+      attemptedSearchUrl?: string
+      finalUrl?: string
+      navigationElapsedMs?: number
+      pageState?: string
+      environmentId?: string
+      environmentIndex?: number
       rawResultCount: number
       uniqueResultCount: number
       scannedResultCount?: number
@@ -220,6 +232,14 @@ export type RedditSearchStreamEvent =
 export type QuerySearchState = {
   status: RedditSearchStatus
   reason?: string
+  errorCode?: string
+  errorMessage?: string
+  attemptedSearchUrl?: string
+  finalUrl?: string
+  navigationElapsedMs?: number
+  pageState?: string
+  environmentId?: string
+  environmentIndex?: number
   rawResultCount: number
   uniqueResultCount: number
   scannedResultCount: number
@@ -410,6 +430,8 @@ export type CrawlOnlyStreamEvent =
       targetUrlCount?: number
       environmentId?: string
       environmentIndex?: number
+      searchSort?: 'relevance'
+      attemptedSearchUrl?: string
     }
   | {
       type: 'query_result'
@@ -418,7 +440,15 @@ export type CrawlOnlyStreamEvent =
       targetUrlCount?: number
       status: Exclude<RedditSearchStatus, 'pending' | 'running'>
       reason: string
+      errorCode?: string
+      errorMessage?: string
       searchResultsUrl: string
+      attemptedSearchUrl?: string
+      finalUrl?: string
+      navigationElapsedMs?: number
+      pageState?: string
+      environmentId?: string
+      environmentIndex?: number
       rawResultCount: number
       uniqueResultCount: number
       scannedResultCount?: number

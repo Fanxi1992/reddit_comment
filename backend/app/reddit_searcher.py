@@ -19,11 +19,30 @@ from app.schemas import PlannedQuery, RedditSearchRequest, RedditSearchResultIte
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error.reddit_searcher")
 
 SUPPORTED_SEARCH_TIME_RANGES = frozenset({"all", "month", "week"})
 SUPPORTED_SEARCH_SORTS = frozenset({"relevance"})
 REDDIT_SEARCH_NAVIGATION_TIMEOUT_MS = 20_000
+REDDIT_PAGE_STATE_READY = "ready"
+REDDIT_ERROR_MESSAGES = {
+    "adspower_browser_start_failed": "AdsPower 浏览器环境启动失败",
+    "adspower_browser_connect_failed": "无法连接 AdsPower 浏览器环境",
+    "browser_context_not_initialized": "AdsPower 浏览器上下文尚未初始化",
+    "reddit_navigation_timeout": "打开 Reddit 搜索 URL 超时",
+    "reddit_navigation_failed": "打开 Reddit 搜索 URL 失败",
+    "reddit_unexpected_redirect": "浏览器没有停留在预期的 Reddit 搜索 URL",
+    "reddit_login_required": "Reddit 要求重新登录",
+    "reddit_security_challenge": "Reddit 显示了安全验证或验证码页面",
+    "reddit_rate_limited": "Reddit 对当前环境进行了访问限流",
+    "reddit_unavailable": "Reddit 当前不可用或返回了服务错误",
+    "reddit_no_results": "Reddit 搜索没有返回结果",
+    "reddit_no_qualified_results": "搜索结果均未通过当前筛选条件",
+    "reddit_result_dom_unrecognized": "搜索页存在帖子链接，但当前结果解析规则无法识别，可能是 Reddit 页面结构已变化",
+    "reddit_search_results_not_detected": "搜索页未检测到结果或明确的无结果提示，可能是页面尚未正确加载",
+    "reddit_result_collection_failed": "采集 Reddit 搜索结果时发生异常",
+    "reddit_search_execution_failed": "执行 Reddit 搜索时发生未分类异常",
+}
 DEFAULT_SEARCH_ENV_CONCURRENCY = 3
 DEFAULT_SEARCH_QUERIES_PER_ENV = 2
 DEFAULT_SEARCH_MAX_SCAN_PER_QUERY = 150
@@ -126,6 +145,44 @@ class QuerySearchResult:
     rejected_result_count: int = 0
     filter_reject_counts: dict[str, int] | None = None
     target_reached: bool = False
+    error_code: str = ""
+    error_message: str = ""
+    attempted_search_url: str = ""
+    final_url: str = ""
+    navigation_elapsed_ms: int = 0
+    page_state: str = ""
+
+
+@dataclass(frozen=True)
+class SearchNavigationOutcome:
+    attempted_url: str
+    final_url: str
+    elapsed_ms: int
+    page_state: str = REDDIT_PAGE_STATE_READY
+
+
+class RedditSearchDiagnosticError(RuntimeError):
+    def __init__(
+        self,
+        code: str,
+        *,
+        attempted_url: str = "",
+        final_url: str = "",
+        elapsed_ms: int = 0,
+        page_state: str = "",
+        detail: str = "",
+    ) -> None:
+        self.code = code
+        self.attempted_url = attempted_url
+        self.final_url = final_url
+        self.elapsed_ms = elapsed_ms
+        self.page_state = page_state
+        self.detail = detail
+        super().__init__(code)
+
+    @property
+    def message(self) -> str:
+        return REDDIT_ERROR_MESSAGES.get(self.code, REDDIT_ERROR_MESSAGES["reddit_search_execution_failed"])
 
 
 @dataclass
@@ -211,9 +268,12 @@ class RedditSearchRunner:
         ws_url = self._start_browser()
         if not ws_url:
             raise RuntimeError("adspower_browser_start_failed")
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.connect_over_cdp(ws_url)
-        self._context = self._browser.contexts[0] if self._browser.contexts else self._browser.new_context()
+        try:
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.connect_over_cdp(ws_url)
+            self._context = self._browser.contexts[0] if self._browser.contexts else self._browser.new_context()
+        except Exception as exc:
+            raise RuntimeError(f"adspower_browser_connect_failed:{type(exc).__name__}") from exc
         self._close_existing_reddit_pages()
         return self
 
@@ -260,6 +320,7 @@ class RedditSearchRunner:
         self,
         query: str,
         *,
+        query_index: int | None = None,
         search_sort: str,
         search_time: str,
         target_count: int,
@@ -269,35 +330,152 @@ class RedditSearchRunner:
         if self._context is None:
             raise RuntimeError("browser_context_not_initialized")
 
+        attempted_search_url = build_reddit_search_url(
+            self.settings.target_url,
+            query,
+            search_sort=search_sort,
+            search_time=search_time,
+        )
+        started_at = time.perf_counter()
+        navigation: SearchNavigationOutcome | None = None
+        logger.info(
+            "Reddit search query started: env_id=%s query_index=%s query=%r sort=%s time=%s target_count=%s attempted_url=%s",
+            self.settings.env_id,
+            query_index or "",
+            query,
+            search_sort,
+            search_time,
+            target_count,
+            attempted_search_url,
+        )
         page = self._context.new_page()
         try:
-            search_results_url = self._navigate_to_search_results_page(
+            navigation = self._navigate_to_search_results_page(
                 page,
                 query,
                 search_sort=search_sort,
                 search_time=search_time,
+                search_url=attempted_search_url,
             )
-            outcome = self._collect_search_results_until_target(
-                page,
-                query,
-                target_count,
-                search_filter=search_filter,
-                max_scan_count=max_scan_count,
-            )
+            try:
+                outcome = self._collect_search_results_until_target(
+                    page,
+                    query,
+                    target_count,
+                    search_filter=search_filter,
+                    max_scan_count=max_scan_count,
+                )
+            except Exception as exc:
+                raise RedditSearchDiagnosticError(
+                    "reddit_result_collection_failed",
+                    attempted_url=navigation.attempted_url,
+                    final_url=_safe_page_url(page),
+                    elapsed_ms=navigation.elapsed_ms,
+                    page_state=self._inspect_reddit_page_state(page),
+                    detail=_safe_error_detail(exc),
+                ) from exc
+
             if not outcome.results and self._is_no_results_page(page):
-                return _make_query_search_result("no_results", "no_results", search_results_url, outcome)
+                result = _make_query_search_result(
+                    "no_results",
+                    "reddit_no_results",
+                    navigation.final_url,
+                    outcome,
+                    error_code="reddit_no_results",
+                    error_message=REDDIT_ERROR_MESSAGES["reddit_no_results"],
+                    navigation=navigation,
+                )
+                self._log_query_result(query_index, query, result, started_at)
+                return result
+
+            if not outcome.results and outcome.scanned_result_count == 0:
+                page_state = self._inspect_reddit_page_state(page)
+                if page_state != REDDIT_PAGE_STATE_READY:
+                    code = page_state
+                elif self._visible_reddit_post_link_count(page) > 0:
+                    code = "reddit_result_dom_unrecognized"
+                else:
+                    code = "reddit_search_results_not_detected"
+                raise RedditSearchDiagnosticError(
+                    code,
+                    attempted_url=navigation.attempted_url,
+                    final_url=_safe_page_url(page),
+                    elapsed_ms=navigation.elapsed_ms,
+                    page_state=page_state,
+                )
+
             status = "success" if outcome.results else "failed"
-            reason = "" if outcome.results else "no_qualified_search_results_collected"
+            reason = "" if outcome.results else "reddit_no_qualified_results"
             if outcome.results and not outcome.target_reached:
                 reason = "target_not_reached_after_scan_limit" if outcome.scanned_result_count >= max_scan_count else "target_not_reached"
-            return _make_query_search_result(status, reason, search_results_url, outcome)
+            error_code = reason if status == "failed" else ""
+            result = _make_query_search_result(
+                status,
+                reason,
+                navigation.final_url,
+                outcome,
+                error_code=error_code,
+                error_message=REDDIT_ERROR_MESSAGES.get(error_code, ""),
+                navigation=navigation,
+            )
+            self._log_query_result(query_index, query, result, started_at)
+            return result
+        except RedditSearchDiagnosticError as exc:
+            if exc.detail:
+                logger.warning(
+                    "Reddit search diagnostic detail: env_id=%s query_index=%s error_code=%s detail=%s",
+                    self.settings.env_id,
+                    query_index or "",
+                    exc.code,
+                    exc.detail,
+                )
+            result = _make_diagnostic_failure_result(exc)
+            self._log_query_result(query_index, query, result, started_at)
+            return result
         except Exception as exc:
-            return QuerySearchResult("failed", str(exc), "", [], 0)
+            diagnostic = RedditSearchDiagnosticError(
+                "reddit_search_execution_failed",
+                attempted_url=attempted_search_url,
+                final_url=_safe_page_url(page),
+                elapsed_ms=navigation.elapsed_ms if navigation else 0,
+                page_state=self._inspect_reddit_page_state(page),
+                detail=_safe_error_detail(exc),
+            )
+            result = _make_diagnostic_failure_result(diagnostic)
+            self._log_query_result(query_index, query, result, started_at)
+            return result
         finally:
             try:
                 page.close()
             except Exception:
                 pass
+
+    def _log_query_result(
+        self,
+        query_index: int | None,
+        query: str,
+        result: QuerySearchResult,
+        started_at: float,
+    ) -> None:
+        log_method = logger.info if result.status in {"success", "no_results"} else logger.warning
+        log_method(
+            "Reddit search query finished: env_id=%s query_index=%s query=%r status=%s error_code=%s "
+            "page_state=%s elapsed_ms=%s navigation_ms=%s scanned=%s qualified=%s rejected=%s "
+            "attempted_url=%s final_url=%s",
+            self.settings.env_id,
+            query_index or "",
+            query,
+            result.status,
+            result.error_code,
+            result.page_state,
+            int((time.perf_counter() - started_at) * 1000),
+            result.navigation_elapsed_ms,
+            result.scanned_result_count,
+            result.qualified_result_count,
+            result.rejected_result_count,
+            result.attempted_search_url,
+            result.final_url,
+        )
 
     def _start_browser(self) -> str | None:
         url = f"{self.settings.api_url}/api/v1/browser/start"
@@ -340,29 +518,89 @@ class RedditSearchRunner:
         *,
         search_sort: str,
         search_time: str,
-    ) -> str:
-        search_url = build_reddit_search_url(
+        search_url: str | None = None,
+    ) -> SearchNavigationOutcome:
+        attempted_url = search_url or build_reddit_search_url(
             self.settings.target_url,
             query,
             search_sort=search_sort,
             search_time=search_time,
         )
-        page.goto(
-            search_url,
-            wait_until="domcontentloaded",
-            timeout=REDDIT_SEARCH_NAVIGATION_TIMEOUT_MS,
-        )
-        self._settle_page(page)
+        started_at = time.perf_counter()
+        response_status: int | None = None
+        try:
+            response = page.goto(
+                attempted_url,
+                wait_until="domcontentloaded",
+                timeout=REDDIT_SEARCH_NAVIGATION_TIMEOUT_MS,
+            )
+            response_status = _safe_response_status(response)
+            self._settle_page(page)
+        except PlaywrightTimeoutError as exc:
+            final_url = _safe_page_url(page)
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            page_state = self._inspect_reddit_page_state(page, response_status=response_status)
+            code = page_state if page_state != REDDIT_PAGE_STATE_READY else "reddit_navigation_timeout"
+            raise RedditSearchDiagnosticError(
+                code,
+                attempted_url=attempted_url,
+                final_url=final_url,
+                elapsed_ms=elapsed_ms,
+                page_state=page_state,
+                detail=_safe_error_detail(exc),
+            ) from exc
+        except Exception as exc:
+            final_url = _safe_page_url(page)
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            page_state = self._inspect_reddit_page_state(page, response_status=response_status)
+            code = page_state if page_state != REDDIT_PAGE_STATE_READY else "reddit_navigation_failed"
+            raise RedditSearchDiagnosticError(
+                code,
+                attempted_url=attempted_url,
+                final_url=final_url,
+                elapsed_ms=elapsed_ms,
+                page_state=page_state,
+                detail=_safe_error_detail(exc),
+            ) from exc
 
-        final_url = page.url
+        final_url = _safe_page_url(page)
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        page_state = self._inspect_reddit_page_state(page, response_status=response_status)
+        if page_state != REDDIT_PAGE_STATE_READY:
+            raise RedditSearchDiagnosticError(
+                page_state,
+                attempted_url=attempted_url,
+                final_url=final_url,
+                elapsed_ms=elapsed_ms,
+                page_state=page_state,
+            )
         if not is_expected_reddit_search_url(
             final_url,
             query=query,
             search_sort=search_sort,
             search_time=search_time,
         ):
-            raise RuntimeError(f"unexpected_reddit_search_url:{final_url}")
-        return final_url
+            raise RedditSearchDiagnosticError(
+                "reddit_unexpected_redirect",
+                attempted_url=attempted_url,
+                final_url=final_url,
+                elapsed_ms=elapsed_ms,
+                page_state=page_state,
+            )
+        logger.info(
+            "Reddit search navigation ready: env_id=%s status_code=%s elapsed_ms=%s attempted_url=%s final_url=%s",
+            self.settings.env_id,
+            response_status or "",
+            elapsed_ms,
+            attempted_url,
+            final_url,
+        )
+        return SearchNavigationOutcome(
+            attempted_url=attempted_url,
+            final_url=final_url,
+            elapsed_ms=elapsed_ms,
+            page_state=page_state,
+        )
 
     def _settle_page(self, page: Page) -> None:
         try:
@@ -370,6 +608,81 @@ class RedditSearchRunner:
         except PlaywrightTimeoutError:
             pass
         time.sleep(random.uniform(0.8, 1.4))
+
+    def _inspect_reddit_page_state(self, page: Page, *, response_status: int | None = None) -> str:
+        if response_status == 429:
+            return "reddit_rate_limited"
+        if response_status is not None and response_status >= 500:
+            return "reddit_unavailable"
+        if response_status in {401, 403}:
+            return "reddit_login_required" if response_status == 401 else "reddit_security_challenge"
+
+        current_url = _safe_page_url(page)
+        try:
+            parsed = urlsplit(current_url)
+        except ValueError:
+            parsed = urlsplit("")
+        normalized_path = re.sub(r"/+", "/", parsed.path or "/").lower()
+        normalized_host = (parsed.hostname or "").lower()
+        if normalized_host in {"accounts.reddit.com", "login.reddit.com"} or re.search(
+            r"/(?:login|account/login)(?:/|$)",
+            normalized_path,
+        ):
+            return "reddit_login_required"
+        if re.search(r"/(?:challenge|captcha|verify|verification)(?:/|$)", normalized_path):
+            return "reddit_security_challenge"
+
+        try:
+            signals = page.evaluate(
+                """
+                () => {
+                    const text = (document.body?.innerText || "").toLowerCase().slice(0, 20000);
+                    const title = (document.title || "").toLowerCase();
+                    return { text, title };
+                }
+                """
+            )
+        except Exception:
+            return REDDIT_PAGE_STATE_READY
+
+        body_text = str((signals or {}).get("text") or "").lower()
+        title_text = str((signals or {}).get("title") or "").lower()
+        combined_text = f"{title_text}\n{body_text}"
+        if any(
+            marker in combined_text
+            for marker in (
+                "verify you are human",
+                "verification required",
+                "complete the security check",
+                "challenge required",
+                "recaptcha",
+                "captcha",
+                "whoa there",
+            )
+        ):
+            return "reddit_security_challenge"
+        if any(
+            marker in combined_text
+            for marker in (
+                "too many requests",
+                "you've been doing that a lot",
+                "you’ve been doing that a lot",
+                "rate limit exceeded",
+                "request has been blocked due to a network policy",
+            )
+        ):
+            return "reddit_rate_limited"
+        if any(
+            marker in combined_text
+            for marker in (
+                "reddit is having some trouble",
+                "our cdn was unable to reach our servers",
+                "service unavailable",
+                "upstream connect error",
+            )
+        ):
+            return "reddit_unavailable"
+        return REDDIT_PAGE_STATE_READY
 
     def _collect_search_results_until_target(
         self,
@@ -410,7 +723,8 @@ class RedditSearchRunner:
                 return outcome
             if new_count == 0:
                 no_growth_rounds += 1
-                if selector.scanned_result_count and no_growth_rounds >= 8:
+                no_growth_limit = 8 if selector.scanned_result_count else 5
+                if no_growth_rounds >= no_growth_limit:
                     outcome = selector.outcome()
                     _log_suspicious_metadata_duplicates(query, outcome.results)
                     return outcome
@@ -564,6 +878,27 @@ class RedditSearchRunner:
                             if (rect.width <= 0 || rect.height <= 0) continue;
                             const href = normalizeUrl(anchor.getAttribute("href") || "");
                             if (/\\/comments\\//i.test(href)) urls.add(href);
+                        }
+                        return urls.size;
+                    }
+                    """
+                )
+            )
+        except Exception:
+            return 0
+
+    def _visible_reddit_post_link_count(self, page: Page) -> int:
+        try:
+            return int(
+                page.evaluate(
+                    """
+                    () => {
+                        const urls = new Set();
+                        for (const anchor of document.querySelectorAll("a[href*='/comments/']")) {
+                            const rect = anchor.getBoundingClientRect();
+                            if (rect.width <= 0 || rect.height <= 0) continue;
+                            const href = anchor.getAttribute("href") || "";
+                            if (/\\/r\\/[^/]+\\/comments\\/[^/]+/i.test(href)) urls.add(href);
                         }
                         return urls.size;
                     }
@@ -729,6 +1064,8 @@ def run_reddit_search_batch(payload: RedditSearchRequest, stop_event: threading.
                         query=query_event["query"],
                         target_count=int(query_event["targetUrlCount"]),
                         result=query_event["result"],
+                        environment_id=str(query_event.get("environmentId") or ""),
+                        environment_index=int(query_event.get("environmentIndex") or 0),
                     )
                     query_results.append(query_payload)
                     yield query_payload
@@ -776,6 +1113,24 @@ def _run_search_environment_worker(
                 if stop_event.is_set():
                     break
                 target_count = _query_target_count(query, fallback_target_count)
+                attempted_url = _try_build_reddit_search_url(
+                    settings.target_url,
+                    query.query,
+                    search_sort=search_sort,
+                    search_time=query.suggestedTimeRange,
+                )
+                logger.info(
+                    "Reddit search assignment started: env_id=%s environment_index=%s query_index=%s query=%r "
+                    "sort=%s time=%s target_count=%s attempted_url=%s",
+                    settings.env_id,
+                    environment_index,
+                    query_index,
+                    query.query,
+                    search_sort,
+                    query.suggestedTimeRange,
+                    target_count,
+                    attempted_url,
+                )
                 event_queue.put(
                     {
                         "type": "query_started",
@@ -785,10 +1140,13 @@ def _run_search_environment_worker(
                         "targetUrlCount": target_count,
                         "environmentId": settings.env_id,
                         "environmentIndex": environment_index,
+                        "searchSort": search_sort,
+                        "attemptedSearchUrl": attempted_url,
                     }
                 )
                 result = runner.collect_query(
                     query.query,
+                    query_index=query_index,
                     search_sort=search_sort,
                     search_time=query.suggestedTimeRange,
                     target_count=target_count,
@@ -802,13 +1160,29 @@ def _run_search_environment_worker(
                         "query": query,
                         "targetUrlCount": target_count,
                         "result": result,
+                        "environmentId": settings.env_id,
+                        "environmentIndex": environment_index,
                     }
                 )
                 processed_count += 1
     except Exception as exc:
         if not stop_event.is_set():
+            error_code = _classify_worker_error(exc)
+            error_message = REDDIT_ERROR_MESSAGES.get(error_code, REDDIT_ERROR_MESSAGES["reddit_search_execution_failed"])
+            logger.exception(
+                "Reddit search environment failed: env_id=%s environment_index=%s error_code=%s",
+                settings.env_id,
+                environment_index,
+                error_code,
+            )
             for query_index, query in assignments[processed_count:]:
                 target_count = _query_target_count(query, fallback_target_count)
+                attempted_url = _try_build_reddit_search_url(
+                    settings.target_url,
+                    query.query,
+                    search_sort=search_sort,
+                    search_time=query.suggestedTimeRange,
+                )
                 event_queue.put(
                     {
                         "type": "query_started",
@@ -818,6 +1192,8 @@ def _run_search_environment_worker(
                         "targetUrlCount": target_count,
                         "environmentId": settings.env_id,
                         "environmentIndex": environment_index,
+                        "searchSort": search_sort,
+                        "attemptedSearchUrl": attempted_url,
                     }
                 )
                 event_queue.put(
@@ -826,7 +1202,18 @@ def _run_search_environment_worker(
                         "queryIndex": query_index,
                         "query": query,
                         "targetUrlCount": target_count,
-                        "result": QuerySearchResult("failed", f"环境启动或执行失败: {exc}", "", [], 0),
+                        "result": QuerySearchResult(
+                            status="failed",
+                            reason=error_code,
+                            search_results_url=attempted_url,
+                            results=[],
+                            raw_url_count=0,
+                            error_code=error_code,
+                            error_message=error_message,
+                            attempted_search_url=attempted_url,
+                        ),
+                        "environmentId": settings.env_id,
+                        "environmentIndex": environment_index,
                     }
                 )
     finally:
@@ -838,6 +1225,10 @@ def _make_query_search_result(
     reason: str,
     search_results_url: str,
     outcome: SearchCollectionOutcome,
+    *,
+    error_code: str = "",
+    error_message: str = "",
+    navigation: SearchNavigationOutcome | None = None,
 ) -> QuerySearchResult:
     return QuerySearchResult(
         status=status,
@@ -850,6 +1241,29 @@ def _make_query_search_result(
         rejected_result_count=outcome.rejected_result_count,
         filter_reject_counts=outcome.filter_reject_counts,
         target_reached=outcome.target_reached,
+        error_code=error_code,
+        error_message=error_message,
+        attempted_search_url=navigation.attempted_url if navigation else search_results_url,
+        final_url=navigation.final_url if navigation else search_results_url,
+        navigation_elapsed_ms=navigation.elapsed_ms if navigation else 0,
+        page_state=navigation.page_state if navigation else "",
+    )
+
+
+def _make_diagnostic_failure_result(error: RedditSearchDiagnosticError) -> QuerySearchResult:
+    display_url = error.final_url or error.attempted_url
+    return QuerySearchResult(
+        status="failed",
+        reason=error.code,
+        search_results_url=display_url,
+        results=[],
+        raw_url_count=0,
+        error_code=error.code,
+        error_message=error.message,
+        attempted_search_url=error.attempted_url,
+        final_url=error.final_url,
+        navigation_elapsed_ms=error.elapsed_ms,
+        page_state=error.page_state,
     )
 
 
@@ -860,6 +1274,8 @@ def _build_query_result_payload(
     query: PlannedQuery,
     target_count: int,
     result: QuerySearchResult,
+    environment_id: str = "",
+    environment_index: int = 0,
 ) -> dict[str, Any]:
     raw_items = [
         build_result_item(query, raw_item, duplicate_of_query=deduper.find_duplicate(raw_item.post_url))
@@ -871,10 +1287,18 @@ def _build_query_result_payload(
         "type": "query_result",
         "queryIndex": query_index,
         "query": query.query,
+        "environmentId": environment_id,
+        "environmentIndex": environment_index,
         "targetUrlCount": target_count,
         "status": result.status,
         "reason": result.reason,
+        "errorCode": result.error_code,
+        "errorMessage": result.error_message,
         "searchResultsUrl": result.search_results_url,
+        "attemptedSearchUrl": result.attempted_search_url,
+        "finalUrl": result.final_url,
+        "navigationElapsedMs": result.navigation_elapsed_ms,
+        "pageState": result.page_state,
         "rawResultCount": result.raw_url_count,
         "uniqueResultCount": sum(1 for item in raw_items if not item.duplicateOfQuery),
         "scannedResultCount": result.scanned_result_count,
@@ -888,6 +1312,57 @@ def _build_query_result_payload(
 
 def _query_target_count(query: PlannedQuery, fallback_target_count: int) -> int:
     return query.targetUrlCount or fallback_target_count
+
+
+def _safe_page_url(page: Page) -> str:
+    try:
+        return str(page.url or "").strip()
+    except Exception:
+        return ""
+
+
+def _safe_response_status(response: Any) -> int | None:
+    if response is None:
+        return None
+    try:
+        return int(response.status)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _safe_error_detail(exc: Exception) -> str:
+    detail = re.sub(r"\s+", " ", str(exc or "")).strip()
+    return detail[:500]
+
+
+def _classify_worker_error(exc: Exception) -> str:
+    raw_error = str(exc or "")
+    for code in (
+        "adspower_browser_start_failed",
+        "adspower_browser_connect_failed",
+        "browser_context_not_initialized",
+    ):
+        if raw_error.startswith(code):
+            return code
+    return "reddit_search_execution_failed"
+
+
+def _try_build_reddit_search_url(
+    target_url: str,
+    query: str,
+    *,
+    search_sort: str,
+    search_time: str,
+) -> str:
+    try:
+        return build_reddit_search_url(
+            target_url,
+            query,
+            search_sort=search_sort,
+            search_time=search_time,
+        )
+    except Exception:
+        return ""
 
 
 def _load_search_env_concurrency() -> int:

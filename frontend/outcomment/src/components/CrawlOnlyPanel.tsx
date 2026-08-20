@@ -115,6 +115,14 @@ export function CrawlOnlyPanel({ source, queries = [], searchResults = [], searc
       return
     }
     if (event.type === 'query_result') {
+      if (event.status === 'failed' || event.status === 'no_results') {
+        const message = event.errorMessage || event.reason || 'Reddit 搜索失败'
+        const code = event.errorCode ? `（${event.errorCode}）` : ''
+        const url = event.finalUrl || event.attemptedSearchUrl || event.searchResultsUrl
+        setError(`${message}${code}${url ? `；URL：${url}` : ''}`)
+        setMessage(`搜索未完成：${event.query}`)
+        return
+      }
       setMessage(
         `搜索完成：${event.query}，扫描 ${event.scannedResultCount ?? event.rawResultCount} 条，合格 ${event.qualifiedResultCount ?? event.uniqueResultCount} 条`,
       )
@@ -192,7 +200,7 @@ export function CrawlOnlyPanel({ source, queries = [], searchResults = [], searc
       return
     }
     if (event.type === 'error') {
-      setError(event.message)
+      setError((current) => current || event.message)
       setMessage('任务失败')
     }
   }

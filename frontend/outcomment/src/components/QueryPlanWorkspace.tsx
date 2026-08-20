@@ -415,6 +415,9 @@ export function QueryPlanWorkspace({ businessMode }: QueryPlanWorkspaceProps) {
           qualifiedResultCount: 0,
           rejectedResultCount: 0,
           filterRejectCounts: {},
+          attemptedSearchUrl: event.attemptedSearchUrl,
+          environmentId: event.environmentId,
+          environmentIndex: event.environmentIndex,
         },
       }))
       return
@@ -429,7 +432,15 @@ export function QueryPlanWorkspace({ businessMode }: QueryPlanWorkspaceProps) {
         ...current,
         [query.id]: {
           status: event.status,
-          reason: event.reason,
+          reason: event.errorMessage || event.reason,
+          errorCode: event.errorCode,
+          errorMessage: event.errorMessage,
+          attemptedSearchUrl: event.attemptedSearchUrl,
+          finalUrl: event.finalUrl,
+          navigationElapsedMs: event.navigationElapsedMs,
+          pageState: event.pageState,
+          environmentId: event.environmentId,
+          environmentIndex: event.environmentIndex,
           rawResultCount: event.rawResultCount,
           uniqueResultCount: event.uniqueResultCount,
           scannedResultCount: event.scannedResultCount ?? event.rawResultCount,
@@ -1018,8 +1029,27 @@ export function QueryPlanWorkspace({ businessMode }: QueryPlanWorkspaceProps) {
                     {state.status === 'success' && state.targetReached === false ? (
                       <span className="md:col-span-5 text-xs font-medium text-amber-700">筛选后数量不足，已返回当前可用合格 URL。</span>
                     ) : null}
-                    {state.reason && state.status === 'failed' ? (
-                      <span className="md:col-span-5 text-xs text-rose-600">{state.reason}</span>
+                    {state.reason && (state.status === 'failed' || state.status === 'no_results') ? (
+                      <div className="md:col-span-5 space-y-1 text-xs text-rose-600">
+                        <div className="font-medium">{state.reason}</div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-slate-500">
+                          {state.errorCode ? <span>错误代码：{state.errorCode}</span> : null}
+                          {state.environmentId ? <span>环境：{state.environmentId}</span> : null}
+                          {state.navigationElapsedMs !== undefined ? <span>导航：{state.navigationElapsedMs} ms</span> : null}
+                          {state.pageState ? <span>页面状态：{state.pageState}</span> : null}
+                        </div>
+                        {state.finalUrl || state.attemptedSearchUrl ? (
+                          <a
+                            className="block truncate text-teal-700 underline decoration-teal-300 underline-offset-2"
+                            href={state.finalUrl || state.attemptedSearchUrl}
+                            rel="noreferrer"
+                            target="_blank"
+                            title={state.finalUrl || state.attemptedSearchUrl}
+                          >
+                            {state.finalUrl || state.attemptedSearchUrl}
+                          </a>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
                 )
