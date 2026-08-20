@@ -18,7 +18,14 @@ except ModuleNotFoundError:
     sys.modules.setdefault("playwright", playwright_module)
     sys.modules.setdefault("playwright.sync_api", sync_api_module)
 
-from app.reddit_searcher import RawSearchResult, SearchResultSelector, evaluate_search_filter_reject_reason, parse_reddit_age_hours
+from app.reddit_searcher import (
+    RawSearchResult,
+    SearchResultSelector,
+    build_reddit_search_url,
+    evaluate_search_filter_reject_reason,
+    is_expected_reddit_search_url,
+    parse_reddit_age_hours,
+)
 from app.schemas import SearchFilterCriteria
 
 
@@ -41,6 +48,115 @@ def make_item(
         comments=comments,
         raw_text="",
     )
+
+
+class RedditSearchUrlTests(unittest.TestCase):
+    def test_builds_explicit_posts_relevance_url_for_every_supported_time_range(self) -> None:
+        expected_urls = {
+            "week": "https://www.reddit.com/search/?q=what+is+the+best+man&type=posts&sort=relevance&t=week",
+            "month": "https://www.reddit.com/search/?q=what+is+the+best+man&type=posts&sort=relevance&t=month",
+            "all": "https://www.reddit.com/search/?q=what+is+the+best+man&type=posts&sort=relevance&t=all",
+        }
+
+        for search_time, expected_url in expected_urls.items():
+            with self.subTest(search_time=search_time):
+                self.assertEqual(
+                    build_reddit_search_url(
+                        "https://www.reddit.com/",
+                        "what is the best man",
+                        search_sort="relevance",
+                        search_time=search_time,
+                    ),
+                    expected_url,
+                )
+
+    def test_encodes_query_characters_without_turning_them_into_url_parameters(self) -> None:
+        query = 'AI video & image + C++ / "tools"?'
+
+        url = build_reddit_search_url(
+            "https://www.reddit.com/existing/path?ignored=true",
+            query,
+            search_sort="relevance",
+            search_time="month",
+        )
+
+        self.assertIn("q=AI+video+%26+image+%2B+C%2B%2B+%2F+%22tools%22%3F", url)
+        self.assertTrue(
+            is_expected_reddit_search_url(
+                url,
+                query=query,
+                search_sort="relevance",
+                search_time="month",
+            )
+        )
+
+    def test_search_url_validation_accepts_parameter_reordering_and_tracking_parameters(self) -> None:
+        url = (
+            "https://reddit.com/search?sort=relevance&t=week&type=posts"
+            "&q=what+is+the+best+man&tracking_id=example"
+        )
+
+        self.assertTrue(
+            is_expected_reddit_search_url(
+                url,
+                query="what is the best man",
+                search_sort="relevance",
+                search_time="week",
+            )
+        )
+
+    def test_search_url_validation_rejects_wrong_route_or_search_contract(self) -> None:
+        invalid_urls = [
+            "https://example.com/search/?q=test&type=posts&sort=relevance&t=week",
+            "https://www.reddit.com/r/test/?q=test&type=posts&sort=relevance&t=week",
+            "https://www.reddit.com/search/?q=other&type=posts&sort=relevance&t=week",
+            "https://www.reddit.com/search/?q=test&type=all&sort=relevance&t=week",
+            "https://www.reddit.com/search/?q=test&type=posts&sort=top&t=week",
+            "https://www.reddit.com/search/?q=test&type=posts&sort=relevance&t=year",
+        ]
+
+        for url in invalid_urls:
+            with self.subTest(url=url):
+                self.assertFalse(
+                    is_expected_reddit_search_url(
+                        url,
+                        query="test",
+                        search_sort="relevance",
+                        search_time="week",
+                    )
+                )
+
+    def test_builder_rejects_blank_query_unsupported_options_and_non_reddit_target(self) -> None:
+        invalid_inputs = [
+            {
+                "target_url": "https://www.reddit.com",
+                "query": " ",
+                "search_sort": "relevance",
+                "search_time": "week",
+            },
+            {
+                "target_url": "https://www.reddit.com",
+                "query": "test",
+                "search_sort": "top",
+                "search_time": "week",
+            },
+            {
+                "target_url": "https://www.reddit.com",
+                "query": "test",
+                "search_sort": "relevance",
+                "search_time": "year",
+            },
+            {
+                "target_url": "https://example.com",
+                "query": "test",
+                "search_sort": "relevance",
+                "search_time": "week",
+            },
+        ]
+
+        for values in invalid_inputs:
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                build_reddit_search_url(**values)
 
 
 class RedditSearchFilterTests(unittest.TestCase):

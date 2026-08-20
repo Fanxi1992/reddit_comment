@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 import requests
 from dotenv import load_dotenv
@@ -40,6 +40,72 @@ ADSPOWER_BROWSER_START_RETRIES = 4
 
 _adspower_api_lock = threading.Lock()
 _adspower_last_api_call_at = 0.0
+
+
+def build_reddit_search_url(
+    target_url: str,
+    query: str,
+    *,
+    search_sort: str,
+    search_time: str,
+) -> str:
+    normalized_query = query.strip()
+    if not normalized_query:
+        raise ValueError("reddit_search_query_required")
+    if search_sort not in SEARCH_SORT_LABELS:
+        raise ValueError(f"unsupported_search_sort:{search_sort}")
+    if search_time not in SEARCH_TIME_LABELS:
+        raise ValueError(f"unsupported_search_time:{search_time}")
+
+    parsed_target = urlsplit(target_url.strip())
+    if (
+        parsed_target.scheme.lower() not in {"http", "https"}
+        or not parsed_target.netloc
+        or not _is_reddit_search_hostname(parsed_target.hostname)
+        or parsed_target.username is not None
+        or parsed_target.password is not None
+    ):
+        raise ValueError(f"unsupported_reddit_target_url:{target_url}")
+
+    query_string = urlencode(
+        [
+            ("q", normalized_query),
+            ("type", "posts"),
+            ("sort", search_sort),
+            ("t", search_time),
+        ]
+    )
+    return urlunsplit((parsed_target.scheme.lower(), parsed_target.netloc, "/search/", query_string, ""))
+
+
+def is_expected_reddit_search_url(
+    url: str,
+    *,
+    query: str,
+    search_sort: str,
+    search_time: str,
+) -> bool:
+    try:
+        parsed = urlsplit(url.strip())
+        params = parse_qs(parsed.query, keep_blank_values=True)
+    except (TypeError, ValueError):
+        return False
+
+    normalized_path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/")
+    return (
+        parsed.scheme.lower() in {"http", "https"}
+        and _is_reddit_search_hostname(parsed.hostname)
+        and normalized_path == "/search"
+        and params.get("q") == [query.strip()]
+        and params.get("type") == ["posts"]
+        and params.get("sort") == [search_sort]
+        and params.get("t") == [search_time]
+    )
+
+
+def _is_reddit_search_hostname(hostname: str | None) -> bool:
+    normalized = (hostname or "").lower().rstrip(".")
+    return normalized == "reddit.com" or normalized.endswith(".reddit.com")
 
 
 @dataclass
