@@ -1,6 +1,5 @@
 import json
 import logging
-import math
 import os
 import queue
 import random
@@ -13,8 +12,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 import requests
 from dotenv import load_dotenv
-from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from app.schemas import PlannedQuery, RedditSearchRequest, RedditSearchResultItem, RedditSearchSummary, SearchFilterCriteria
 
@@ -23,15 +21,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SEARCH_URL_PREFIX = "https://www.reddit.com/search/?q="
-SEARCH_TIME_LABELS = {
-    "all": "All time",
-    "month": "Past month",
-    "week": "Past week",
-}
-SEARCH_TIME_BY_LABEL = {value.lower(): key for key, value in SEARCH_TIME_LABELS.items()}
-SEARCH_SORT_LABELS = {"relevance": "Relevance"}
-SEARCH_SORT_BY_LABEL = {value.lower(): key for key, value in SEARCH_SORT_LABELS.items()}
+SUPPORTED_SEARCH_TIME_RANGES = frozenset({"all", "month", "week"})
+SUPPORTED_SEARCH_SORTS = frozenset({"relevance"})
+REDDIT_SEARCH_NAVIGATION_TIMEOUT_MS = 20_000
 DEFAULT_SEARCH_ENV_CONCURRENCY = 3
 DEFAULT_SEARCH_QUERIES_PER_ENV = 2
 DEFAULT_SEARCH_MAX_SCAN_PER_QUERY = 150
@@ -52,9 +44,9 @@ def build_reddit_search_url(
     normalized_query = query.strip()
     if not normalized_query:
         raise ValueError("reddit_search_query_required")
-    if search_sort not in SEARCH_SORT_LABELS:
+    if search_sort not in SUPPORTED_SEARCH_SORTS:
         raise ValueError(f"unsupported_search_sort:{search_sort}")
-    if search_time not in SEARCH_TIME_LABELS:
+    if search_time not in SUPPORTED_SEARCH_TIME_RANGES:
         raise ValueError(f"unsupported_search_time:{search_time}")
 
     parsed_target = urlsplit(target_url.strip())
@@ -208,47 +200,9 @@ class SearchResultSelector:
         )
 
 
-class HumanMouse:
-    def __init__(self) -> None:
-        self.current_x = random.randint(100, 500)
-        self.current_y = random.randint(100, 300)
-
-    def move_to_element(self, page: Page, locator: Locator) -> None:
-        locator.wait_for(state="visible", timeout=10000)
-        locator.scroll_into_view_if_needed()
-        time.sleep(random.uniform(0.35, 0.9))
-
-        box = locator.bounding_box()
-        if not box:
-            raise RuntimeError("unable_to_get_bounding_box")
-
-        target_x = box["x"] + box["width"] * random.uniform(0.2, 0.8)
-        target_y = box["y"] + box["height"] * random.uniform(0.2, 0.8)
-        distance = math.hypot(target_x - self.current_x, target_y - self.current_y)
-        steps = min(80, max(12, int(distance / 7)))
-
-        for index in range(steps + 1):
-            ratio = index / steps
-            eased = ratio * (2 - ratio)
-            x = self.current_x + (target_x - self.current_x) * eased + random.uniform(-0.8, 0.8)
-            y = self.current_y + (target_y - self.current_y) * eased + random.uniform(-0.8, 0.8)
-            page.mouse.move(x, y)
-            time.sleep(random.uniform(0.002, 0.007))
-
-        self.current_x, self.current_y = target_x, target_y
-
-    def human_click(self, page: Page, locator: Locator) -> None:
-        self.move_to_element(page, locator)
-        time.sleep(random.uniform(0.08, 0.22))
-        page.mouse.down()
-        time.sleep(random.uniform(0.04, 0.12))
-        page.mouse.up()
-
-
 class RedditSearchRunner:
     def __init__(self, settings: AdsPowerSettings) -> None:
         self.settings = settings
-        self.mouse = HumanMouse()
         self._playwright = None
         self._browser = None
         self._context = None
@@ -306,6 +260,7 @@ class RedditSearchRunner:
         self,
         query: str,
         *,
+        search_sort: str,
         search_time: str,
         target_count: int,
         search_filter: SearchFilterCriteria | None,
@@ -316,9 +271,12 @@ class RedditSearchRunner:
 
         page = self._context.new_page()
         try:
-            search_results_url = self._run_search_flow_to_search_page(page, query)
-            self._align_search_filters(page, search_time=search_time)
-            search_results_url = page.url
+            search_results_url = self._navigate_to_search_results_page(
+                page,
+                query,
+                search_sort=search_sort,
+                search_time=search_time,
+            )
             outcome = self._collect_search_results_until_target(
                 page,
                 query,
@@ -375,25 +333,35 @@ class RedditSearchRunner:
             return False
         return payload.get("code") == 0
 
-    def _run_search_flow_to_search_page(self, page: Page, query: str) -> str:
-        page.goto(self.settings.target_url, wait_until="domcontentloaded")
+    def _navigate_to_search_results_page(
+        self,
+        page: Page,
+        query: str,
+        *,
+        search_sort: str,
+        search_time: str,
+    ) -> str:
+        search_url = build_reddit_search_url(
+            self.settings.target_url,
+            query,
+            search_sort=search_sort,
+            search_time=search_time,
+        )
+        page.goto(
+            search_url,
+            wait_until="domcontentloaded",
+            timeout=REDDIT_SEARCH_NAVIGATION_TIMEOUT_MS,
+        )
         self._settle_page(page)
-        search_input = self._locate_search_input(page)
-        if search_input is None:
-            raise RuntimeError("search_input_not_found")
 
-        self.mouse.human_click(page, search_input)
-        time.sleep(random.uniform(0.4, 1.0))
-        page.keyboard.press("Control+A")
-        time.sleep(0.08)
-        page.keyboard.press("Backspace")
-        time.sleep(0.12)
-        self._human_typing(page, query)
-        time.sleep(random.uniform(0.5, 1.2))
-        page.keyboard.press("Enter")
-
-        final_url = self._wait_for_search_results(page)
-        self._settle_page(page)
+        final_url = page.url
+        if not is_expected_reddit_search_url(
+            final_url,
+            query=query,
+            search_sort=search_sort,
+            search_time=search_time,
+        ):
+            raise RuntimeError(f"unexpected_reddit_search_url:{final_url}")
         return final_url
 
     def _settle_page(self, page: Page) -> None:
@@ -402,148 +370,6 @@ class RedditSearchRunner:
         except PlaywrightTimeoutError:
             pass
         time.sleep(random.uniform(0.8, 1.4))
-
-    def _locate_search_input(self, page: Page) -> Locator | None:
-        candidates = [
-            page.get_by_placeholder("Find anything"),
-            page.locator("reddit-search-large input[name='q']"),
-            page.locator("input[name='q']"),
-        ]
-        for candidate_group in candidates:
-            locator = self._first_visible(candidate_group)
-            if locator is not None:
-                return locator
-        return None
-
-    def _first_visible(self, locator_group: Locator) -> Locator | None:
-        try:
-            count = locator_group.count()
-        except PlaywrightError:
-            return None
-        for index in range(count):
-            candidate = locator_group.nth(index)
-            try:
-                if candidate.is_visible():
-                    return candidate
-            except PlaywrightError:
-                continue
-        return None
-
-    def _human_typing(self, page: Page, text: str) -> None:
-        for index, char in enumerate(text):
-            if 0 < index < len(text) - 1 and random.random() < 0.035:
-                page.keyboard.type(random.choice("abcdefghijklmnopqrstuvwxyz"))
-                time.sleep(random.uniform(0.08, 0.2))
-                page.keyboard.press("Backspace")
-                time.sleep(random.uniform(0.18, 0.35))
-            page.keyboard.type(char)
-            time.sleep(random.uniform(0.045, 0.14))
-
-    def _wait_for_search_results(self, page: Page) -> str:
-        deadline = time.time() + 12.0
-        last_url = page.url
-        while time.time() < deadline:
-            current_url = page.url
-            last_url = current_url
-            if current_url.startswith(DEFAULT_SEARCH_URL_PREFIX):
-                return current_url
-            time.sleep(0.1)
-        raise RuntimeError(f"search_results_url_not_reached:{last_url}")
-
-    def _align_search_filters(self, page: Page, *, search_time: str) -> None:
-        self._align_single_filter(page, kind="sort", target_token="relevance")
-        self._align_single_filter(page, kind="time", target_token=search_time)
-
-    def _align_single_filter(self, page: Page, *, kind: str, target_token: str) -> None:
-        current_filters = self._get_current_search_filters(page)
-        if current_filters[kind] == target_token:
-            return
-
-        target_label = self._filter_label(kind, target_token)
-        button = self._find_filter_button(page, kind)
-        if button is None:
-            raise RuntimeError(f"{kind}_filter_button_not_found")
-
-        before_url = page.url
-        self.mouse.human_click(page, button)
-        time.sleep(random.uniform(0.2, 0.5))
-        option = self._find_visible_text_candidate(page, target_label)
-        if option is None:
-            raise RuntimeError(f"{kind}_filter_option_not_found:{target_label}")
-        self.mouse.human_click(page, option)
-        self._wait_for_filter_application(page, before_url)
-
-        current_filters = self._get_current_search_filters(page)
-        if current_filters[kind] != target_token:
-            raise RuntimeError(f"{kind}_filter_not_applied:{target_token}")
-
-    def _get_current_search_filters(self, page: Page) -> dict[str, str]:
-        result = {"sort": "", "time": ""}
-        selectors = {
-            "sort": "search-sort-dropdown-menu#search_modifier_post_sort",
-            "time": "search-sort-dropdown-menu#search_modifier_time_range",
-        }
-        mappings = {"sort": SEARCH_SORT_BY_LABEL, "time": SEARCH_TIME_BY_LABEL}
-        for kind, selector in selectors.items():
-            locator = page.locator(selector).first
-            try:
-                locator.wait_for(state="visible", timeout=4000)
-                text = locator.evaluate(
-                    """(el) => {
-                        const trigger = el.querySelector("[slot='trigger-content']");
-                        return (trigger?.innerText || trigger?.textContent || "").trim();
-                    }"""
-                )
-            except Exception:
-                text = ""
-            result[kind] = mappings[kind].get(_normalize_visible_text(str(text or "")).lower(), "")
-        return result
-
-    def _find_filter_button(self, page: Page, kind: str) -> Locator | None:
-        selector = (
-            "search-sort-dropdown-menu#search_modifier_post_sort"
-            if kind == "sort"
-            else "search-sort-dropdown-menu#search_modifier_time_range"
-        )
-        candidate = page.locator(selector).first
-        try:
-            candidate.wait_for(state="visible", timeout=4000)
-            return candidate
-        except Exception:
-            return None
-
-    def _find_visible_text_candidate(self, page: Page, target_text: str) -> Locator | None:
-        locator = page.get_by_text(target_text, exact=True)
-        try:
-            count = locator.count()
-        except Exception:
-            return None
-        for index in range(count):
-            candidate = locator.nth(index)
-            try:
-                if candidate.is_visible():
-                    return candidate
-            except Exception:
-                continue
-        return None
-
-    def _wait_for_filter_application(self, page: Page, before_url: str) -> None:
-        deadline = time.time() + 8.0
-        while time.time() < deadline:
-            if page.url != before_url:
-                self._settle_page(page)
-                time.sleep(random.uniform(1.2, 2.2))
-                return
-            time.sleep(0.1)
-        self._settle_page(page)
-        time.sleep(random.uniform(1.2, 2.2))
-
-    def _filter_label(self, kind: str, token: str) -> str:
-        mapping = SEARCH_SORT_LABELS if kind == "sort" else SEARCH_TIME_LABELS
-        label = mapping.get(token)
-        if not label:
-            raise RuntimeError(f"unsupported_{kind}_filter:{token}")
-        return label
 
     def _collect_search_results_until_target(
         self,
@@ -871,6 +697,7 @@ def run_reddit_search_batch(payload: RedditSearchRequest, stop_event: threading.
                 environment_index,
                 chunk,
                 payload.perQueryLimit,
+                payload.searchSort,
                 payload.searchFilter,
                 max_scan_count,
                 event_queue,
@@ -936,6 +763,7 @@ def _run_search_environment_worker(
     environment_index: int,
     assignments: list[tuple[int, PlannedQuery]],
     fallback_target_count: int,
+    search_sort: str,
     search_filter: SearchFilterCriteria | None,
     max_scan_count: int,
     event_queue: queue.Queue[dict[str, Any] | None],
@@ -961,6 +789,7 @@ def _run_search_environment_worker(
                 )
                 result = runner.collect_query(
                     query.query,
+                    search_sort=search_sort,
                     search_time=query.suggestedTimeRange,
                     target_count=target_count,
                     search_filter=search_filter,

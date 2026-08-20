@@ -2,6 +2,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -19,14 +20,19 @@ except ModuleNotFoundError:
     sys.modules.setdefault("playwright.sync_api", sync_api_module)
 
 from app.reddit_searcher import (
+    REDDIT_SEARCH_NAVIGATION_TIMEOUT_MS,
+    AdsPowerSettings,
+    QuerySearchResult,
     RawSearchResult,
+    RedditSearchRunner,
     SearchResultSelector,
     build_reddit_search_url,
     evaluate_search_filter_reject_reason,
     is_expected_reddit_search_url,
     parse_reddit_age_hours,
+    run_reddit_search_batch,
 )
-from app.schemas import SearchFilterCriteria
+from app.schemas import PlannedQuery, QueryPlanGenerateRequest, RedditSearchRequest, SearchFilterCriteria
 
 
 def make_item(
@@ -157,6 +163,140 @@ class RedditSearchUrlTests(unittest.TestCase):
         for values in invalid_inputs:
             with self.subTest(values=values), self.assertRaises(ValueError):
                 build_reddit_search_url(**values)
+
+
+class FakeNavigationPage:
+    def __init__(self, final_url: str | None = None) -> None:
+        self.url = "about:blank"
+        self.final_url = final_url
+        self.goto_calls: list[tuple[str, str, int]] = []
+
+    def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
+        self.goto_calls.append((url, wait_until, timeout))
+        self.url = self.final_url or url
+
+
+class RedditSearchNavigationTests(unittest.TestCase):
+    def make_runner(self) -> RedditSearchRunner:
+        return RedditSearchRunner(
+            AdsPowerSettings(
+                api_url="http://127.0.0.1:50325",
+                api_key="test-key",
+                user_id="test-user",
+                target_url="https://www.reddit.com",
+            )
+        )
+
+    def test_navigates_directly_to_the_explicit_search_url(self) -> None:
+        runner = self.make_runner()
+        page = FakeNavigationPage()
+
+        with patch.object(runner, "_settle_page") as settle_page:
+            final_url = runner._navigate_to_search_results_page(
+                page,
+                "what is the best man",
+                search_sort="relevance",
+                search_time="week",
+            )
+
+        expected_url = (
+            "https://www.reddit.com/search/?q=what+is+the+best+man"
+            "&type=posts&sort=relevance&t=week"
+        )
+        self.assertEqual(final_url, expected_url)
+        self.assertEqual(
+            page.goto_calls,
+            [(expected_url, "domcontentloaded", REDDIT_SEARCH_NAVIGATION_TIMEOUT_MS)],
+        )
+        settle_page.assert_called_once_with(page)
+
+    def test_rejects_navigation_that_does_not_land_on_the_expected_search(self) -> None:
+        runner = self.make_runner()
+        page = FakeNavigationPage(final_url="https://www.reddit.com/")
+
+        with patch.object(runner, "_settle_page"), self.assertRaisesRegex(
+            RuntimeError,
+            "unexpected_reddit_search_url",
+        ):
+            runner._navigate_to_search_results_page(
+                page,
+                "test query",
+                search_sort="relevance",
+                search_time="month",
+            )
+
+
+class RedditSearchBatchPropagationTests(unittest.TestCase):
+    def test_batch_passes_sort_and_time_range_to_the_shared_runner(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class FakeRunner:
+            def __init__(self, settings: AdsPowerSettings) -> None:
+                self.settings = settings
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback) -> None:
+                return None
+
+            def collect_query(self, query: str, **kwargs) -> QuerySearchResult:
+                calls.append({"query": query, **kwargs})
+                return QuerySearchResult(
+                    status="no_results",
+                    reason="no_results",
+                    search_results_url="https://www.reddit.com/search/",
+                    results=[],
+                    raw_url_count=0,
+                )
+
+        payload = RedditSearchRequest(
+            productContext=QueryPlanGenerateRequest(
+                productName="Test product",
+                productDescription="Test description",
+            ),
+            queries=[
+                PlannedQuery(
+                    query="test query",
+                    intent="other",
+                    reason="Regression test",
+                    priority=1,
+                    suggestedTimeRange="month",
+                    targetUrlCount=3,
+                )
+            ],
+            perQueryLimit=20,
+            searchSort="relevance",
+        )
+        settings = AdsPowerSettings(
+            api_url="http://127.0.0.1:50325",
+            api_key="test-key",
+            user_id="test-user",
+        )
+
+        with (
+            patch("app.reddit_searcher.load_adspower_search_profiles", return_value=[settings]),
+            patch("app.reddit_searcher.RedditSearchRunner", FakeRunner),
+            patch("app.reddit_searcher._load_search_env_concurrency", return_value=1),
+            patch("app.reddit_searcher._load_search_queries_per_env", return_value=1),
+            patch("app.reddit_searcher._load_search_max_scan_per_query", return_value=150),
+        ):
+            events = list(run_reddit_search_batch(payload))
+
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "query": "test query",
+                    "search_sort": "relevance",
+                    "search_time": "month",
+                    "target_count": 3,
+                    "search_filter": None,
+                    "max_scan_count": 150,
+                }
+            ],
+        )
+        self.assertEqual(events[-1]["type"], "done")
 
 
 class RedditSearchFilterTests(unittest.TestCase):
