@@ -1,0 +1,7 @@
+{
+  "fictional_example": true,
+  "network_requests_sent": 0,
+  "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+  "timeout_seconds": 120,
+  "headers_saved": false
+}

@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "google/gemini-3.5-flash"
 DEFAULT_TIMEOUT_SECONDS = 120
+VALID_REASONING_EFFORTS = {"low", "medium", "high"}
 
 load_dotenv()
 
@@ -25,24 +26,50 @@ def get_openrouter_comment_model() -> str:
     return os.getenv("OPENROUTER_COMMENT_MODEL", "").strip() or DEFAULT_MODEL
 
 
+def get_openrouter_comment_temperature() -> float | None:
+    raw = os.getenv("OPENROUTER_COMMENT_TEMPERATURE", "").strip()
+    if not raw or raw.lower() in {"default", "none", "auto"}:
+        return None
+    try:
+        value = float(raw)
+        return max(0.0, min(2.0, value))
+    except ValueError:
+        return None
+
+
+def get_openrouter_comment_reasoning_effort() -> str | None:
+    raw = os.getenv("OPENROUTER_COMMENT_REASONING_EFFORT", "").strip().lower()
+    if not raw:
+        return "medium"
+    if raw in {"none", "off", "false", "0", "disable", "disabled"}:
+        return None
+    if raw in VALID_REASONING_EFFORTS:
+        return raw
+    return "medium"
+
+
 def chat_json(
     *,
     model: str,
     prompt: str,
     schema_name: str,
     schema: dict[str, Any],
+    system_prompt: str | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     max_tokens: int = 4096,
-    temperature: float = 0.2,
+    temperature: float | None = 0.2,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     return _send_chat_completion(
         model=model,
+        system_prompt=system_prompt,
         content=[{"type": "text", "text": prompt}],
         schema_name=schema_name,
         schema=schema,
         timeout_seconds=timeout_seconds,
         max_tokens=max_tokens,
         temperature=temperature,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -53,9 +80,11 @@ def chat_json_with_images(
     image_data_urls: list[str],
     schema_name: str,
     schema: dict[str, Any],
+    system_prompt: str | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     max_tokens: int = 4096,
-    temperature: float = 0.2,
+    temperature: float | None = 0.2,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     content.extend(
@@ -69,12 +98,14 @@ def chat_json_with_images(
     )
     return _send_chat_completion(
         model=model,
+        system_prompt=system_prompt,
         content=content,
         schema_name=schema_name,
         schema=schema,
         timeout_seconds=timeout_seconds,
         max_tokens=max_tokens,
         temperature=temperature,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -86,20 +117,32 @@ def _send_chat_completion(
     schema: dict[str, Any],
     timeout_seconds: int,
     max_tokens: int,
-    temperature: float,
+    temperature: float | None,
+    system_prompt: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         raise OpenRouterError("缺少环境变量 OPENROUTER_API_KEY")
 
-    payload = {
-        "model": model,
-        "messages": [
+    messages: list[dict[str, Any]] = []
+    if system_prompt and system_prompt.strip():
+        messages.append(
             {
-                "role": "user",
-                "content": content,
+                "role": "system",
+                "content": system_prompt.strip(),
             }
-        ],
+        )
+    messages.append(
+        {
+            "role": "user",
+            "content": content,
+        }
+    )
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -111,9 +154,17 @@ def _send_chat_completion(
         "provider": {
             "require_parameters": True,
         },
-        "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    normalized_effort = (reasoning_effort or "").strip().lower()
+    if normalized_effort in VALID_REASONING_EFFORTS:
+        payload["reasoning"] = {
+            "effort": normalized_effort,
+            "exclude": True,
+        }
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -122,6 +173,14 @@ def _send_chat_completion(
 
     try:
         response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload, timeout=timeout_seconds)
+        if not response.ok and "reasoning" in payload and response.status_code in {400, 404, 422}:
+            fallback_payload = {key: value for key, value in payload.items() if key != "reasoning"}
+            response = requests.post(
+                OPENROUTER_API_URL,
+                headers=headers,
+                json=fallback_payload,
+                timeout=timeout_seconds,
+            )
     except requests.RequestException as exc:
         raise OpenRouterError(f"OpenRouter 请求失败: {exc}") from exc
 

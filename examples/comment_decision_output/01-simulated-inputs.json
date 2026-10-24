@@ -1,0 +1,97 @@
+{
+  "fictional_example": true,
+  "productContext": {
+    "productName": "ClipNest",
+    "productDescription": "A browser-based video tool for turning long recordings into short clips. It supports automatic captions, manual caption correction, and SRT export.",
+    "targetAudience": "Solo creators and small podcast teams.",
+    "sellingPoints": "Editable automatic captions; SRT export; browser-based workflow.",
+    "competitors": "CapCut, Descript",
+    "commentRequirements": "Write in English. Be helpful and conversational. Do not include links.",
+    "forbiddenTopics": "Do not invent pricing, discounts, or features that are not listed.",
+    "desiredQueryCount": 12
+  },
+  "searchResult": {
+    "query": "podcast captions workflow",
+    "queryIntent": "problem_solution",
+    "priority": 1,
+    "timeRange": "week",
+    "resultIndex": 1,
+    "postUrl": "https://www.reddit.com/r/VideoEditing/comments/demo123/caption_workflow",
+    "postId": "demo123",
+    "title": "How do you handle captions for weekly podcast clips?",
+    "subreddit": "r/VideoEditing",
+    "ageText": "2d ago",
+    "votes": 58,
+    "comments": 12,
+    "duplicateOfQuery": null,
+    "matchedQueries": [
+      "podcast captions workflow",
+      "automatic subtitle editor"
+    ]
+  },
+  "detail": {
+    "status": "success",
+    "reason": "",
+    "post_url": "https://www.reddit.com/r/VideoEditing/comments/demo123/caption_workflow",
+    "final_url": "https://www.reddit.com/r/VideoEditing/comments/demo123/caption_workflow",
+    "title": "How do you handle captions for weekly podcast clips?",
+    "subreddit": "r/VideoEditing",
+    "author": "weekly_podcaster",
+    "flair": "Workflow",
+    "post_type": "text",
+    "body_text": "I turn a 45-minute podcast into five short clips every week. The editing is manageable, but correcting auto-captions takes forever, especially names. Is there a less painful workflow? I need to edit the wording and export subtitles separately.",
+    "body_length": 243,
+    "media_urls": [],
+    "outbound_url": "",
+    "upvotes": 58,
+    "comments": 12,
+    "comment_tree": {
+      "total_comment_count": 12,
+      "top_level_count": 2,
+      "loaded_comment_count": 3,
+      "included_comment_count": 3,
+      "max_depth": 1,
+      "comments": [
+        {
+          "comment_id": "c001",
+          "comment_url": "https://www.reddit.com/r/VideoEditing/comments/demo123/caption_workflow/comment/c001",
+          "author": "timeline_tamer",
+          "is_op": false,
+          "depth": 0,
+          "score": 17,
+          "text": "Auto-captions are great until your guest's name becomes a kitchen appliance. Make sure you can export SRT instead of only burning captions into the video.",
+          "text_length": 154,
+          "replies": [
+            {
+              "comment_id": "c002",
+              "comment_url": "https://www.reddit.com/r/VideoEditing/comments/demo123/caption_workflow/comment/c002",
+              "author": "weekly_podcaster",
+              "is_op": true,
+              "depth": 1,
+              "score": 5,
+              "text": "Exactly. I need editable captions and an SRT file for a client's upload.",
+              "text_length": 72,
+              "replies": []
+            }
+          ]
+        },
+        {
+          "comment_id": "c003",
+          "comment_url": "https://www.reddit.com/r/VideoEditing/comments/demo123/caption_workflow/comment/c003",
+          "author": "cut_first",
+          "is_op": false,
+          "depth": 0,
+          "score": 9,
+          "text": "Lock your cuts before fixing captions, otherwise you get to do the same job twice.",
+          "text_length": 82,
+          "replies": []
+        }
+      ]
+    },
+    "loaded_comment_count": 3,
+    "included_comment_count": 3,
+    "top_level_comment_count": 2,
+    "max_comment_depth": 1
+  },
+  "selectedCommentLengthStyle": "medium"
+}

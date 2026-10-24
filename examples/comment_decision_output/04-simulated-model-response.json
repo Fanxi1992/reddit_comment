@@ -1,0 +1,9 @@
+{
+  "threadForensics": "Gate 1 pass: VideoEditing podcast workflow. Gate 2 pass: no ClipNest mentions or shill accusations. Gate 3 pass: OP explicitly asks for editable auto-captions + separate SRT export. Gate 4 pass: no forbidden topics.",
+  "shouldComment": true,
+  "skipReason": null,
+  "selectedPlaybook": "playbook_1_conditional_partition",
+  "voiceProfile": "profile_b_crisp_partitioner",
+  "commentUrl": "https://www.reddit.com/r/VideoEditing/comments/demo123/caption_workflow/comment/c002",
+  "commentText": "ClipNest if you specifically need editable auto-captions with clean SRT export for client deliveries. CapCut is fine for quick burned-in social subs, but fixing guest names after the fact is a headache without a separate subtitle file."
+}
