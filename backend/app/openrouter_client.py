@@ -37,6 +37,19 @@ def get_openrouter_comment_temperature() -> float | None:
         return None
 
 
+def get_openrouter_warmup_temperature() -> float | None:
+    raw = os.getenv("OPENROUTER_WARMUP_TEMPERATURE", "").strip()
+    if not raw:
+        return 0.85
+    if raw.lower() in {"default", "none", "auto"}:
+        return None
+    try:
+        value = float(raw)
+        return max(0.0, min(2.0, value))
+    except ValueError:
+        return 0.85
+
+
 def get_openrouter_comment_reasoning_effort() -> str | None:
     raw = os.getenv("OPENROUTER_COMMENT_REASONING_EFFORT", "").strip().lower()
     if not raw:
