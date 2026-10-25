@@ -390,8 +390,6 @@ def _build_response_schema(comment_count: int) -> dict[str, Any]:
                     "distinctDiscussionHooks": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "minItems": 4,
-                        "maxItems": 12,
                         "description": (
                             "4 to 12 distinct, non-overlapping micro-hooks extracted from the post title, body paragraphs, "
                             "existing comments, and attached images so the generated comments spread across varied angles."
@@ -407,8 +405,10 @@ def _build_response_schema(comment_count: int) -> dict[str, Any]:
             },
             "comments": {
                 "type": "array",
-                "minItems": comment_count,
-                "maxItems": comment_count,
+                "description": (
+                    f"Must contain exactly {comment_count} independent top-level comment items "
+                    f"(slotIndex 1 through {comment_count})."
+                ),
                 "items": {
                     "type": "object",
                     "properties": {
@@ -426,7 +426,7 @@ def _build_response_schema(comment_count: int) -> dict[str, Any]:
                             "type": "string",
                             "enum": list(WARMUP_LENGTH_BANDS),
                         },
-                        "text": {"type": "string", "minLength": 1, "maxLength": 10_000},
+                        "text": {"type": "string"},
                     },
                     "required": [
                         "slotIndex",
@@ -466,13 +466,12 @@ def _validate_comments(raw_result: dict[str, Any], expected_count: int) -> list[
         voice_profile = str(item.get("voiceProfile") or "").strip() or None
         text = _sanitize_warmup_comment_text(str(item.get("text") or ""), voice_profile=voice_profile)
         if not text:
-            raise WarmupCommentGenerationError("OpenRouter 返回了空评论")
+            continue
         if len(text) > 10_000:
-            raise WarmupCommentGenerationError("OpenRouter 返回了超过 10000 字符的评论")
+            text = text[:10_000].rstrip()
         comments.append(text)
 
-    if len(comments) != expected_count:
-        raise WarmupCommentGenerationError(
-            f"OpenRouter 返回评论数量不符：期望 {expected_count} 条，实际 {len(comments)} 条"
-        )
-    return comments
+    if not comments:
+        raise WarmupCommentGenerationError("OpenRouter 返回了空评论列表")
+
+    return comments[:expected_count]
