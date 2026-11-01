@@ -64,6 +64,7 @@ def generate_query_plan(payload: QueryPlanGenerateRequest) -> QueryPlanGenerateR
         prompt=_build_prompt(payload),
         schema_name="query_plan",
         schema=QUERY_PLAN_SCHEMA,
+        reasoning_effort="low",
     )
 
     try:

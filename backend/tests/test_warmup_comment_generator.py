@@ -169,7 +169,7 @@ class WarmupCommentGeneratorUpgradeTests(unittest.TestCase):
         sent_payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(sent_payload["messages"][0]["role"], "system")
         self.assertEqual(sent_payload["messages"][1]["role"], "user")
-        self.assertEqual(sent_payload["temperature"], 0.85)
+        self.assertNotIn("temperature", sent_payload)
         self.assertEqual(sent_payload["reasoning"], {"effort": "medium", "exclude": True})
         self.assertEqual(
             sent_payload["response_format"]["json_schema"]["schema"],

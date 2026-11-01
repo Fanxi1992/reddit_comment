@@ -7,11 +7,12 @@ from dotenv import load_dotenv
 
 
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemini-3.5-flash"
+DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash-1017"
 DEFAULT_TIMEOUT_SECONDS = 120
+DEFAULT_MAX_TOKENS = 8192
 VALID_REASONING_EFFORTS = {"low", "medium", "high"}
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 class OpenRouterError(RuntimeError):
@@ -39,15 +40,13 @@ def get_openrouter_comment_temperature() -> float | None:
 
 def get_openrouter_warmup_temperature() -> float | None:
     raw = os.getenv("OPENROUTER_WARMUP_TEMPERATURE", "").strip()
-    if not raw:
-        return 0.85
-    if raw.lower() in {"default", "none", "auto"}:
+    if not raw or raw.lower() in {"default", "none", "auto"}:
         return None
     try:
         value = float(raw)
         return max(0.0, min(2.0, value))
     except ValueError:
-        return 0.85
+        return None
 
 
 def get_openrouter_comment_reasoning_effort() -> str | None:
@@ -69,8 +68,8 @@ def chat_json(
     schema: dict[str, Any],
     system_prompt: str | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-    max_tokens: int = 4096,
-    temperature: float | None = 0.2,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    temperature: float | None = None,
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     return _send_chat_completion(
@@ -95,8 +94,8 @@ def chat_json_with_images(
     schema: dict[str, Any],
     system_prompt: str | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-    max_tokens: int = 4096,
-    temperature: float | None = 0.2,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    temperature: float | None = None,
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
