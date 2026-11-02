@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from app.image_utils import download_image_bytes
 from app.openrouter_client import (
+    OpenRouterError,
     chat_json_with_images,
     get_openrouter_comment_model,
     get_openrouter_comment_reasoning_effort,
@@ -248,24 +249,47 @@ def generate_comment_decision(
         return _skipped("帖子正文和首屏评论都不足，已跳过")
 
     image_data_urls = build_image_data_urls(detail)
-    raw_decision = chat_json_with_images(
-        model=get_openrouter_comment_model(),
-        system_prompt=_build_system_prompt(has_images=bool(image_data_urls)),
-        prompt=_build_prompt(
-            product_context,
-            search_result,
-            detail,
-            allowed_targets,
-            comment_length_style,
-            attached_image_count=len(image_data_urls),
-        ),
-        image_data_urls=image_data_urls,
-        schema_name="comment_decision",
-        schema=COMMENT_DECISION_SCHEMA,
-        timeout_seconds=OPENROUTER_TIMEOUT_SECONDS,
-        temperature=get_openrouter_comment_temperature(),
-        reasoning_effort=get_openrouter_comment_reasoning_effort(),
-    )
+    try:
+        raw_decision = chat_json_with_images(
+            model=get_openrouter_comment_model(),
+            system_prompt=_build_system_prompt(has_images=bool(image_data_urls)),
+            prompt=_build_prompt(
+                product_context,
+                search_result,
+                detail,
+                allowed_targets,
+                comment_length_style,
+                attached_image_count=len(image_data_urls),
+            ),
+            image_data_urls=image_data_urls,
+            schema_name="comment_decision",
+            schema=COMMENT_DECISION_SCHEMA,
+            timeout_seconds=OPENROUTER_TIMEOUT_SECONDS,
+            temperature=get_openrouter_comment_temperature(),
+            reasoning_effort=get_openrouter_comment_reasoning_effort(),
+        )
+    except OpenRouterError:
+        if not image_data_urls:
+            raise
+        raw_decision = chat_json_with_images(
+            model=get_openrouter_comment_model(),
+            system_prompt=_build_system_prompt(has_images=False),
+            prompt=_build_prompt(
+                product_context,
+                search_result,
+                detail,
+                allowed_targets,
+                comment_length_style,
+                attached_image_count=0,
+            ),
+            image_data_urls=[],
+            schema_name="comment_decision",
+            schema=COMMENT_DECISION_SCHEMA,
+            timeout_seconds=OPENROUTER_TIMEOUT_SECONDS,
+            temperature=get_openrouter_comment_temperature(),
+            reasoning_effort=get_openrouter_comment_reasoning_effort(),
+            max_retries=1,
+        )
 
     try:
         return _validate_decision(raw_decision, allowed_targets)

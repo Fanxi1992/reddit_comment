@@ -9,6 +9,7 @@ from app.comment_decider import (
     limited_detail_for_prompt,
 )
 from app.openrouter_client import (
+    OpenRouterError,
     chat_json_with_images,
     get_openrouter_comment_model,
     get_openrouter_comment_reasoning_effort,
@@ -286,27 +287,52 @@ def generate_warmup_comments(
     image_data_urls = build_image_data_urls(detail)
     has_images = len(image_data_urls) > 0
     schema = _build_response_schema(comment_count)
-    raw_result = chat_json_with_images(
-        model=get_openrouter_comment_model(),
-        system_prompt=_build_warmup_system_prompt(has_images=has_images),
-        prompt=_build_prompt(
-            post=post,
-            detail=detail,
-            custom_prompt=custom_prompt,
-            comment_count=comment_count,
-            attached_image_count=len(image_data_urls),
-        ),
-        image_data_urls=image_data_urls,
-        schema_name="warmup_comments",
-        schema=schema,
-        timeout_seconds=OPENROUTER_TIMEOUT_SECONDS,
-        max_tokens=min(24_000, 3_000 + comment_count * 450),
-        temperature=get_openrouter_warmup_temperature(),
-        reasoning_effort=get_openrouter_comment_reasoning_effort(),
-    )
+    attached_count = len(image_data_urls)
+    try:
+        raw_result = chat_json_with_images(
+            model=get_openrouter_comment_model(),
+            system_prompt=_build_warmup_system_prompt(has_images=has_images),
+            prompt=_build_prompt(
+                post=post,
+                detail=detail,
+                custom_prompt=custom_prompt,
+                comment_count=comment_count,
+                attached_image_count=attached_count,
+            ),
+            image_data_urls=image_data_urls,
+            schema_name="warmup_comments",
+            schema=schema,
+            timeout_seconds=OPENROUTER_TIMEOUT_SECONDS,
+            max_tokens=min(24_000, 3_000 + comment_count * 450),
+            temperature=get_openrouter_warmup_temperature(),
+            reasoning_effort=get_openrouter_comment_reasoning_effort(),
+        )
+    except OpenRouterError:
+        if not image_data_urls:
+            raise
+        attached_count = 0
+        raw_result = chat_json_with_images(
+            model=get_openrouter_comment_model(),
+            system_prompt=_build_warmup_system_prompt(has_images=False),
+            prompt=_build_prompt(
+                post=post,
+                detail=detail,
+                custom_prompt=custom_prompt,
+                comment_count=comment_count,
+                attached_image_count=0,
+            ),
+            image_data_urls=[],
+            schema_name="warmup_comments",
+            schema=schema,
+            timeout_seconds=OPENROUTER_TIMEOUT_SECONDS,
+            max_tokens=min(24_000, 3_000 + comment_count * 450),
+            temperature=get_openrouter_warmup_temperature(),
+            reasoning_effort=get_openrouter_comment_reasoning_effort(),
+            max_retries=1,
+        )
     return WarmupGenerationOutput(
         comments=_validate_comments(raw_result, comment_count),
-        attached_image_count=len(image_data_urls),
+        attached_image_count=attached_count,
     )
 
 

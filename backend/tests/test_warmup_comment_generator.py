@@ -176,6 +176,45 @@ class WarmupCommentGeneratorUpgradeTests(unittest.TestCase):
             _build_response_schema(3),
         )
 
+    def test_generate_warmup_comments_falls_back_to_text_when_image_call_fails(self) -> None:
+        post = _sample_warmup_post(with_images=True)
+        simulated_output = {
+            "postForensics": {
+                "exposedBrandsInPost": "Tella",
+                "plannerBrandAndAngleQuota": "Zero brand echo.",
+                "distinctDiscussionHooks": ["2 hours to 15 mins", "Premiere keyframes"],
+            },
+            "comments": [
+                {
+                    "slotIndex": 1,
+                    "hookUsed": "2 hours to 15 mins",
+                    "niche": "mobile_drive_by_banter",
+                    "voiceProfile": "voice_mobile_lowercase",
+                    "lengthBand": "ultra_short",
+                    "text": "cutting a 2 hour edit down to 15 mins is huge.",
+                }
+            ],
+        }
+        from app.openrouter_client import OpenRouterError
+
+        with patch(
+            "app.warmup_comment_generator.build_image_data_urls",
+            return_value=["data:image/png;base64,AAAA"],
+        ):
+            with patch(
+                "app.warmup_comment_generator.chat_json_with_images",
+                side_effect=[OpenRouterError("Multimodal timeout"), simulated_output],
+            ) as mock_chat:
+                output = generate_warmup_comments(
+                    post=post,
+                    custom_prompt="自然讨论",
+                    comment_count=1,
+                )
+
+        self.assertEqual(mock_chat.call_count, 2)
+        self.assertEqual(output.attached_image_count, 0)
+        self.assertEqual(output.comments, ["cutting a 2 hour edit down to 15 mins is huge"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 import asyncio
 import queue
 import threading
+import time
 from collections.abc import Iterator
 
 from fastapi import FastAPI, HTTPException, Request
@@ -33,6 +34,13 @@ MAX_CONCURRENT_REDDIT_SEARCHES = 1
 MAX_CONCURRENT_COMMENT_DECISIONS = 1
 MAX_CONCURRENT_CRAWL_ONLY_TASKS = 1
 MAX_CONCURRENT_WARMUP_GENERATIONS = 2
+STREAM_HEARTBEAT_INTERVAL_SECONDS = 5.0
+MAX_DISCONNECT_JOIN_SECONDS = 8.0
+STREAM_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
 
 
 class AnalysisTaskLimiter:
@@ -112,6 +120,7 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
                 daemon=True,
             )
             producer_thread.start()
+            last_yield_at = time.monotonic()
             while True:
                 if await request.is_disconnected():
                     stop_event.set()
@@ -119,9 +128,13 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
 
                 event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
                 if event is _QUEUE_TIMEOUT:
+                    if time.monotonic() - last_yield_at >= STREAM_HEARTBEAT_INTERVAL_SECONDS:
+                        last_yield_at = time.monotonic()
+                        yield "\n"
                     continue
                 if event is None:
                     return
+                last_yield_at = time.monotonic()
                 yield encode_ndjson(event)
         except Exception as exc:
             yield encode_ndjson({"type": "error", "message": f"Reddit 搜索失败: {exc}"})
@@ -134,7 +147,7 @@ async def stream_reddit_search(payload: RedditSearchRequest, request: Request) -
     return StreamingResponse(
         stream_with_release(),
         media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=STREAM_HEADERS,
     )
 
 
@@ -154,6 +167,7 @@ async def stream_comment_decisions(payload: CommentDecisionRequest, request: Req
                 daemon=True,
             )
             producer_thread.start()
+            last_yield_at = time.monotonic()
             while True:
                 if await request.is_disconnected():
                     stop_event.set()
@@ -161,9 +175,13 @@ async def stream_comment_decisions(payload: CommentDecisionRequest, request: Req
 
                 event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
                 if event is _QUEUE_TIMEOUT:
+                    if time.monotonic() - last_yield_at >= STREAM_HEARTBEAT_INTERVAL_SECONDS:
+                        last_yield_at = time.monotonic()
+                        yield "\n"
                     continue
                 if event is None:
                     return
+                last_yield_at = time.monotonic()
                 yield encode_comment_ndjson(event)
         except Exception as exc:
             yield encode_comment_ndjson({"type": "error", "message": f"评论决策失败: {exc}"})
@@ -176,7 +194,7 @@ async def stream_comment_decisions(payload: CommentDecisionRequest, request: Req
     return StreamingResponse(
         stream_with_release(),
         media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=STREAM_HEADERS,
     )
 
 
@@ -196,6 +214,7 @@ async def stream_crawl_only(payload: CrawlOnlyRequest, request: Request) -> Stre
                 daemon=True,
             )
             producer_thread.start()
+            last_yield_at = time.monotonic()
             while True:
                 if await request.is_disconnected():
                     stop_event.set()
@@ -203,9 +222,13 @@ async def stream_crawl_only(payload: CrawlOnlyRequest, request: Request) -> Stre
 
                 event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
                 if event is _QUEUE_TIMEOUT:
+                    if time.monotonic() - last_yield_at >= STREAM_HEARTBEAT_INTERVAL_SECONDS:
+                        last_yield_at = time.monotonic()
+                        yield "\n"
                     continue
                 if event is None:
                     return
+                last_yield_at = time.monotonic()
                 yield encode_crawl_only_ndjson(event)
         except Exception as exc:
             yield encode_crawl_only_ndjson({"type": "error", "message": f"仅抓取任务失败: {exc}"})
@@ -218,7 +241,7 @@ async def stream_crawl_only(payload: CrawlOnlyRequest, request: Request) -> Stre
     return StreamingResponse(
         stream_with_release(),
         media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=STREAM_HEADERS,
     )
 
 
@@ -238,15 +261,20 @@ async def stream_warmup_collection(payload: WarmupCollectRequest, request: Reque
                 daemon=True,
             )
             producer_thread.start()
+            last_yield_at = time.monotonic()
             while True:
                 if await request.is_disconnected():
                     stop_event.set()
                     return
                 event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
                 if event is _QUEUE_TIMEOUT:
+                    if time.monotonic() - last_yield_at >= STREAM_HEARTBEAT_INTERVAL_SECONDS:
+                        last_yield_at = time.monotonic()
+                        yield "\n"
                     continue
                 if event is None:
                     return
+                last_yield_at = time.monotonic()
                 yield encode_warmup_ndjson(event)
         except Exception as exc:
             yield encode_warmup_ndjson({"type": "error", "message": f"批量帖子读取失败: {exc}"})
@@ -259,7 +287,7 @@ async def stream_warmup_collection(payload: WarmupCollectRequest, request: Reque
     return StreamingResponse(
         stream_with_release(),
         media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=STREAM_HEADERS,
     )
 
 
@@ -279,15 +307,20 @@ async def stream_warmup_comments(payload: WarmupCommentRequest, request: Request
                 daemon=True,
             )
             producer_thread.start()
+            last_yield_at = time.monotonic()
             while True:
                 if await request.is_disconnected():
                     stop_event.set()
                     return
                 event = await asyncio.to_thread(_get_stream_event, event_queue, 0.5)
                 if event is _QUEUE_TIMEOUT:
+                    if time.monotonic() - last_yield_at >= STREAM_HEARTBEAT_INTERVAL_SECONDS:
+                        last_yield_at = time.monotonic()
+                        yield "\n"
                     continue
                 if event is None:
                     return
+                last_yield_at = time.monotonic()
                 yield encode_warmup_ndjson(event)
         except Exception as exc:
             yield encode_warmup_ndjson({"type": "error", "message": f"批量预热评论生成失败: {exc}"})
@@ -300,7 +333,7 @@ async def stream_warmup_comments(payload: WarmupCommentRequest, request: Request
     return StreamingResponse(
         stream_with_release(),
         media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=STREAM_HEADERS,
     )
 
 
@@ -398,8 +431,12 @@ def _normalize_url(url: str) -> str:
 _QUEUE_TIMEOUT = object()
 
 
-async def _join_thread_until_done(thread: threading.Thread) -> None:
-    while thread.is_alive():
+async def _join_thread_until_done(
+    thread: threading.Thread,
+    max_wait_seconds: float = MAX_DISCONNECT_JOIN_SECONDS,
+) -> None:
+    deadline = time.monotonic() + max_wait_seconds
+    while thread.is_alive() and time.monotonic() < deadline:
         try:
             await asyncio.to_thread(thread.join, 0.5)
         except asyncio.CancelledError:

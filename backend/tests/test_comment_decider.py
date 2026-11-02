@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import requests
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -245,6 +247,84 @@ class CommentDeciderUpgradeTests(unittest.TestCase):
         self.assertNotIn("reasoning", second_payload)
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["reason"], "已生成 · 参数直答 / 极简电报 / 一级评论")
+
+    def test_openrouter_retries_on_transient_network_and_502_errors(self) -> None:
+        post_url = "https://www.reddit.com/r/3dprinter/comments/abc123/enclosed_fdm_printer_suggestion"
+        simulated_model_output = {
+            "threadForensics": "All gates pass.",
+            "shouldComment": True,
+            "skipReason": None,
+            "selectedPlaybook": "playbook_1_conditional_partition",
+            "voiceProfile": "profile_b_crisp_partitioner",
+            "commentUrl": post_url,
+            "commentText": "Qidi Q2 if you need active chamber heating. Bambu P1S for everything else.",
+        }
+        bad_gateway_response = Mock()
+        bad_gateway_response.ok = False
+        bad_gateway_response.status_code = 502
+        bad_gateway_response.json.return_value = {"error": {"message": "Bad gateway"}}
+
+        ok_response = Mock()
+        ok_response.ok = True
+        ok_response.json.return_value = {
+            "choices": [{"message": {"content": "```json\n" + json.dumps(simulated_model_output) + "\n```"}}]
+        }
+
+        with patch.dict(
+            os.environ,
+            {"OPENROUTER_API_KEY": "test-key", "OPENROUTER_RETRY_BASE_DELAY_SECONDS": "0"},
+            clear=False,
+        ):
+            with patch(
+                "app.openrouter_client.requests.post",
+                side_effect=[requests.ConnectionError("Connection reset by peer"), bad_gateway_response, ok_response],
+            ) as mock_post:
+                result = generate_comment_decision(
+                    product_context=_sample_product(),
+                    search_result=_sample_search_result(post_url),
+                    detail=_sample_detail(post_url),
+                    comment_length_style="short",
+                )
+
+        self.assertEqual(mock_post.call_count, 3)
+        self.assertEqual(result["status"], "success")
+
+    def test_generate_comment_decision_falls_back_to_text_when_image_call_fails(self) -> None:
+        post_url = "https://www.reddit.com/r/3dprinter/comments/abc123/enclosed_fdm_printer_suggestion"
+        detail = _sample_detail(post_url)
+        detail["post_type"] = "image"
+        detail["media_urls"] = ["https://i.redd.it/sample.png"]
+        simulated_model_output = {
+            "threadForensics": "All gates pass on text fallback.",
+            "shouldComment": True,
+            "skipReason": None,
+            "selectedPlaybook": "playbook_1_conditional_partition",
+            "voiceProfile": "profile_b_crisp_partitioner",
+            "commentUrl": post_url,
+            "commentText": "Qidi Q2 if you need PA6-CF support. Bambu P1S for standard PLA.",
+        }
+
+        from app.openrouter_client import OpenRouterError
+
+        with patch(
+            "app.comment_decider.build_image_data_urls",
+            return_value=["data:image/png;base64,AAAA"],
+        ):
+            with patch(
+                "app.comment_decider.chat_json_with_images",
+                side_effect=[OpenRouterError("Image upload failed"), simulated_model_output],
+            ) as mock_chat:
+                result = generate_comment_decision(
+                    product_context=_sample_product(),
+                    search_result=_sample_search_result(post_url),
+                    detail=detail,
+                    comment_length_style="short",
+                )
+
+        self.assertEqual(mock_chat.call_count, 2)
+        self.assertEqual(mock_chat.call_args_list[0].kwargs["image_data_urls"], ["data:image/png;base64,AAAA"])
+        self.assertEqual(mock_chat.call_args_list[1].kwargs["image_data_urls"], [])
+        self.assertEqual(result["status"], "success")
 
 
 if __name__ == "__main__":
